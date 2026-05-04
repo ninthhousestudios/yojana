@@ -101,7 +101,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Get a context bundle for a task. Shapes: 'summary' (title, status, slice_type, category, edge counts, last history entry), 'working' (acceptance_criteria, decisions, 1-hop neighbor summaries, recent conversation messages, context_refs). Requires: task (UUID or 'project-slug/N'), shape."
+        description = "Get a context bundle for a task. Shapes: 'summary' (title, status, slice_type, category, edge counts, last history entry), 'working' (acceptance_criteria, decisions, 1-hop neighbor summaries, recent conversation messages, context_refs), 'review' (description, acceptance_criteria, decisions, implementation_plan, git/doc refs separated, neighbor summaries). Requires: task (UUID or 'project-slug/N'), shape."
     )]
     pub async fn yojana_context(
         &self,

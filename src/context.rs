@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::db::{EdgeRow, HistoryEntry, TaskRow};
 
-pub const VALID_SHAPES: &[&str] = &["summary", "working"];
+pub const VALID_SHAPES: &[&str] = &["summary", "working", "review"];
 
 #[derive(Debug, Serialize)]
 pub struct SummaryBundle {
@@ -96,6 +96,60 @@ pub fn working(
         neighbors: neighbor_summaries,
         recent_messages: recent,
         context_refs: json_array(&task.context_refs),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewBundle {
+    pub shape: &'static str,
+    pub human_id: String,
+    pub title: String,
+    pub status: String,
+    pub description: String,
+    pub acceptance_criteria: Vec<serde_json::Value>,
+    pub decisions: Vec<serde_json::Value>,
+    pub implementation_plan: Option<String>,
+    pub git_refs: Vec<serde_json::Value>,
+    pub doc_refs: Vec<serde_json::Value>,
+    pub other_refs: Vec<serde_json::Value>,
+    pub neighbors: Vec<SummaryBundle>,
+}
+
+pub fn review(
+    task: &TaskRow,
+    neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)],
+) -> ReviewBundle {
+    let all_refs = json_array(&task.context_refs);
+    let mut git_refs = Vec::new();
+    let mut doc_refs = Vec::new();
+    let mut other_refs = Vec::new();
+
+    for r in &all_refs {
+        match r.get("type").and_then(|t| t.as_str()) {
+            Some(t) if t.starts_with("git:") => git_refs.push(r.clone()),
+            Some(t) if t.starts_with("doc:") => doc_refs.push(r.clone()),
+            _ => other_refs.push(r.clone()),
+        }
+    }
+
+    let neighbor_summaries: Vec<SummaryBundle> = neighbors_with_edges
+        .iter()
+        .map(|(t, e)| summary(t, e))
+        .collect();
+
+    ReviewBundle {
+        shape: "review",
+        human_id: human_id(task),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        description: task.description.clone(),
+        acceptance_criteria: json_array(&task.acceptance_criteria),
+        decisions: json_array(&task.decisions),
+        implementation_plan: task.implementation_plan.clone(),
+        git_refs,
+        doc_refs,
+        other_refs,
+        neighbors: neighbor_summaries,
     }
 }
 
