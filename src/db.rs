@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::YojanaError;
+use crate::state;
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -104,6 +105,21 @@ pub struct TaskUpdates {
 enum TaskIdentifier {
     Uuid(Uuid),
     SlugSeq(String, i64),
+}
+
+// --- Edge types ---
+
+pub const VALID_EDGE_TYPES: &[&str] =
+    &["depends_on", "relates_to", "supersedes", "refines", "motivated_by"];
+
+#[derive(Debug)]
+pub struct EdgeRow {
+    pub id: Uuid,
+    pub source_task_id: Uuid,
+    pub target_task_id: Uuid,
+    pub edge_type: String,
+    pub note: Option<String>,
+    pub created_at: i64,
 }
 
 // --- Project helpers ---
@@ -287,7 +303,8 @@ impl Db {
     fn run_migrations(&self) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
-        conn.execute_batch(include_str!("../migrations/0002_tasks.sql"))
+        conn.execute_batch(include_str!("../migrations/0002_tasks.sql"))?;
+        conn.execute_batch(include_str!("../migrations/0003_edges.sql"))
     }
 
     // --- Project methods ---
@@ -482,6 +499,7 @@ impl Db {
 
         if let Some(ref new_status) = updates.status {
             if new_status != &task.status {
+                state::validate_transition(&task.status, new_status)?;
                 history.push(HistoryEntry {
                     ts: now,
                     kind: "status_changed".into(),
@@ -572,6 +590,126 @@ impl Db {
 
         get_task_by_uuid(&conn, &task.id)?
             .ok_or_else(|| YojanaError::NotFound("updated task".into()))
+    }
+
+    // --- Edge methods ---
+
+    pub fn create_edge(
+        &self,
+        source_task_id: Uuid,
+        target_task_id: Uuid,
+        edge_type: &str,
+        note: Option<&str>,
+    ) -> Result<EdgeRow, YojanaError> {
+        if !VALID_EDGE_TYPES.contains(&edge_type) {
+            return Err(YojanaError::InvalidInput(format!(
+                "invalid edge_type '{edge_type}'; valid: {}",
+                VALID_EDGE_TYPES.join(", ")
+            )));
+        }
+
+        let conn = self.conn.lock();
+
+        get_task_by_uuid(&conn, &source_task_id)?
+            .ok_or_else(|| YojanaError::NotFound(format!("source task '{source_task_id}'")))?;
+        get_task_by_uuid(&conn, &target_task_id)?
+            .ok_or_else(|| YojanaError::NotFound(format!("target task '{target_task_id}'")))?;
+
+        if edge_type == "depends_on" {
+            let existing = load_depends_on_edges(&conn)?;
+            crate::graph::would_cycle(&existing, source_task_id, target_task_id)?;
+        }
+
+        let id = Uuid::now_v7();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        conn.execute(
+            "INSERT INTO task_edges (id, source_task_id, target_task_id, edge_type, note, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                id.as_bytes().as_slice(),
+                source_task_id.as_bytes().as_slice(),
+                target_task_id.as_bytes().as_slice(),
+                edge_type,
+                note,
+                now,
+            ],
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(ref err, _)
+                if err.code == rusqlite::ffi::ErrorCode::ConstraintViolation =>
+            {
+                YojanaError::Conflict(format!(
+                    "edge ({source_task_id}, {target_task_id}, {edge_type}) already exists"
+                ))
+            }
+            other => YojanaError::Db(other),
+        })?;
+
+        get_edge_by_id(&conn, &id)?
+            .ok_or_else(|| YojanaError::NotFound("just-created edge".into()))
+    }
+
+    pub fn delete_edge(&self, id: &Uuid) -> Result<(), YojanaError> {
+        let conn = self.conn.lock();
+        let deleted = conn.execute(
+            "DELETE FROM task_edges WHERE id = ?1",
+            rusqlite::params![id.as_bytes().as_slice()],
+        )?;
+        if deleted == 0 {
+            return Err(YojanaError::NotFound(format!("edge '{id}'")));
+        }
+        Ok(())
+    }
+
+    pub fn list_edges_for_task(&self, task_id: &Uuid) -> Result<Vec<EdgeRow>, YojanaError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, source_task_id, target_task_id, edge_type, note, created_at \
+             FROM task_edges WHERE source_task_id = ?1 OR target_task_id = ?1 \
+             ORDER BY created_at",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![task_id.as_bytes().as_slice()], map_edge_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+}
+
+fn load_depends_on_edges(conn: &Connection) -> Result<Vec<(Uuid, Uuid)>, YojanaError> {
+    let mut stmt = conn.prepare(
+        "SELECT source_task_id, target_task_id FROM task_edges WHERE edge_type = 'depends_on'",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let src = uuid_from_blob(row, "source_task_id")?;
+            let tgt = uuid_from_blob(row, "target_task_id")?;
+            Ok((src, tgt))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn map_edge_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EdgeRow> {
+    Ok(EdgeRow {
+        id: uuid_from_blob(row, "id")?,
+        source_task_id: uuid_from_blob(row, "source_task_id")?,
+        target_task_id: uuid_from_blob(row, "target_task_id")?,
+        edge_type: row.get("edge_type")?,
+        note: row.get("note")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+fn get_edge_by_id(conn: &Connection, id: &Uuid) -> Result<Option<EdgeRow>, YojanaError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source_task_id, target_task_id, edge_type, note, created_at \
+         FROM task_edges WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(rusqlite::params![id.as_bytes().as_slice()], map_edge_row)?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
     }
 }
 
@@ -856,5 +994,274 @@ mod tests {
 
         let result = db.get_task(&task_id).unwrap();
         assert!(result.is_none());
+    }
+
+    // --- Slice 03: state machine integration ---
+
+    #[test]
+    fn valid_status_transition_succeeds() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+        assert_eq!(t.status, "needs-triage");
+
+        let updated = db
+            .update_task(
+                &t.id.to_string(),
+                TaskUpdates {
+                    status: Some("ready-for-agent".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.status, "ready-for-agent");
+
+        let history: Vec<HistoryEntry> = serde_json::from_str(&updated.history).unwrap();
+        let status_entries: Vec<_> = history
+            .iter()
+            .filter(|h| h.kind == "status_changed")
+            .collect();
+        assert_eq!(status_entries.len(), 1);
+        assert_eq!(status_entries[0].payload["from"], "needs-triage");
+        assert_eq!(status_entries[0].payload["to"], "ready-for-agent");
+    }
+
+    #[test]
+    fn invalid_status_transition_rejected() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+
+        let err = db
+            .update_task(
+                &t.id.to_string(),
+                TaskUpdates {
+                    status: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid transition"));
+    }
+
+    #[test]
+    fn noop_status_update_skips_validation() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+
+        let updated = db
+            .update_task(
+                &t.id.to_string(),
+                TaskUpdates {
+                    status: Some("needs-triage".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let history: Vec<HistoryEntry> = serde_json::from_str(&updated.history).unwrap();
+        let status_entries: Vec<_> = history
+            .iter()
+            .filter(|h| h.kind == "status_changed")
+            .collect();
+        assert_eq!(status_entries.len(), 0);
+    }
+
+    #[test]
+    fn non_status_update_bypasses_state_machine() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+
+        let updated = db
+            .update_task(
+                &t.id.to_string(),
+                TaskUpdates {
+                    title: Some("New title".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.title, "New title");
+        assert_eq!(updated.status, "needs-triage");
+    }
+
+    #[test]
+    fn done_is_terminal_except_reopen() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+        let id = t.id.to_string();
+
+        db.update_task(&id, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
+        db.update_task(&id, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap();
+        db.update_task(&id, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
+
+        let err = db.update_task(&id, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap_err();
+        assert!(err.to_string().contains("invalid transition"));
+
+        let reopened = db.update_task(&id, TaskUpdates { status: Some("needs-triage".into()), ..Default::default() }).unwrap();
+        assert_eq!(reopened.status, "needs-triage");
+    }
+
+    // --- Slice 04: edge CRUD ---
+
+    #[test]
+    fn create_and_list_edges() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        let edge = db
+            .create_edge(t1.id, t2.id, "depends_on", Some("t1 needs t2"))
+            .unwrap();
+        assert_eq!(edge.source_task_id, t1.id);
+        assert_eq!(edge.target_task_id, t2.id);
+        assert_eq!(edge.edge_type, "depends_on");
+        assert_eq!(edge.note.as_deref(), Some("t1 needs t2"));
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        assert_eq!(edges.len(), 1);
+
+        let edges = db.list_edges_for_task(&t2.id).unwrap();
+        assert_eq!(edges.len(), 1);
+    }
+
+    #[test]
+    fn delete_edge() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        let edge = db.create_edge(t1.id, t2.id, "relates_to", None).unwrap();
+        db.delete_edge(&edge.id).unwrap();
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn delete_nonexistent_edge_errors() {
+        let db = test_db();
+        let fake_id = Uuid::now_v7();
+        let err = db.delete_edge(&fake_id).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn duplicate_edge_rejected() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        let err = db.create_edge(t1.id, t2.id, "depends_on", None).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn same_pair_different_types_allowed() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        db.create_edge(t1.id, t2.id, "relates_to", None).unwrap();
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        assert_eq!(edges.len(), 2);
+    }
+
+    #[test]
+    fn cycle_detection_rejects_direct_cycle() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        let err = db.create_edge(t2.id, t1.id, "depends_on", None).unwrap_err();
+        assert!(err.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn cycle_detection_rejects_multi_hop() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+        let t3 = create_test_task(&db, "proj", "Task 3");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        db.create_edge(t2.id, t3.id, "depends_on", None).unwrap();
+        let err = db.create_edge(t3.id, t1.id, "depends_on", None).unwrap_err();
+        assert!(err.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn non_dependency_edges_skip_cycle_check() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        db.create_edge(t1.id, t2.id, "relates_to", None).unwrap();
+        db.create_edge(t2.id, t1.id, "relates_to", None).unwrap();
+    }
+
+    #[test]
+    fn invalid_edge_type_rejected() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+
+        let err = db.create_edge(t1.id, t2.id, "blocks", None).unwrap_err();
+        assert!(err.to_string().contains("invalid edge_type"));
+    }
+
+    #[test]
+    fn cross_project_edges() {
+        let db = test_db();
+        db.create_project("alpha", "Alpha", "").unwrap();
+        db.create_project("beta", "Beta", "").unwrap();
+        let t1 = create_test_task(&db, "alpha", "Task A");
+        let t2 = create_test_task(&db, "beta", "Task B");
+
+        let edge = db
+            .create_edge(t1.id, t2.id, "motivated_by", None)
+            .unwrap();
+        assert_eq!(edge.source_task_id, t1.id);
+        assert_eq!(edge.target_task_id, t2.id);
+    }
+
+    #[test]
+    fn cascade_delete_task_removes_edges() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Task 1");
+        let t2 = create_test_task(&db, "proj", "Task 2");
+        let t3 = create_test_task(&db, "proj", "Task 3");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        db.create_edge(t3.id, t2.id, "relates_to", None).unwrap();
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "DELETE FROM tasks WHERE id = ?1",
+                rusqlite::params![t2.id.as_bytes().as_slice()],
+            )
+            .unwrap();
+        }
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        assert!(edges.is_empty());
+        let edges = db.list_edges_for_task(&t3.id).unwrap();
+        assert!(edges.is_empty());
     }
 }

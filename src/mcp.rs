@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::error::YojanaError;
 use crate::tools;
+use crate::tools::edge::EdgeArgs;
 use crate::tools::project::ProjectArgs;
 use crate::tools::task::TaskArgs;
 
@@ -60,6 +61,17 @@ impl YojanaServer {
         Parameters(args): Parameters<TaskArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::task::handle(&self.db, args).map_err(err_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
+
+    #[tool(
+        description = "Create, delete, or list task edges. Actions: create (requires source, target, edge_type — 'depends_on', 'relates_to', 'supersedes', 'refines', 'motivated_by'), delete (requires id), list (requires task — UUID or 'project-slug/N'). Cycle detection on depends_on edges."
+    )]
+    pub async fn yojana_edge(
+        &self,
+        Parameters(args): Parameters<EdgeArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::edge::handle(&self.db, args).map_err(err_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 }
