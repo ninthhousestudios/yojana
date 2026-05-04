@@ -1,4 +1,4 @@
-Status: needs-triage
+Status: done
 
 # 08 — mp-skills issue tracker adapter
 
@@ -21,10 +21,10 @@ Also document the spike/experiment conventions: how to create a spike project, l
 
 ## Acceptance criteria
 
-- [ ] `docs/agents/issue-tracker-yojana.md` exists with tool call mappings for all mp-skills operations
-- [ ] `docs/agents/issue-tracker.md` updated to reference yojana as the active tracker
-- [ ] Spike/experiment conventions documented
-- [ ] A skill reading the adapter doc can create and query yojana tasks without ambiguity
+- [x] `docs/agents/issue-tracker-yojana.md` exists with tool call mappings for all mp-skills operations
+- [x] `docs/agents/issue-tracker.md` updated to reference yojana as the active tracker
+- [x] Spike/experiment conventions documented
+- [x] A skill reading the adapter doc can create and query yojana tasks without ambiguity
 
 ## Blocked by
 

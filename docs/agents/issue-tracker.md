@@ -1,19 +1,17 @@
-# Issue tracker: Local Markdown
+# Issue tracker: Active backend
 
-Issues and PRDs for this repo live as markdown files in `.scratch/`.
+The active issue tracker for this repo is **yojana**. See `docs/agents/issue-tracker-yojana.md` for all tool call mappings.
 
-## Conventions
+Legacy issues from before yojana may still exist as markdown files in `.scratch/`. These are read-only reference — new work goes through yojana.
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The PRD is `.scratch/<feature-slug>/PRD.md`
-- Implementation issues are `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+## Quick reference
 
-## When a skill says "publish to the issue tracker"
-
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
-
-## When a skill says "fetch the relevant ticket"
-
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+| Operation | Tool call |
+|---|---|
+| Create issue | `yojana_task action=create project="<slug>" title="..."` |
+| Get issue | `yojana_task action=get id="<slug>/<N>"` |
+| List/query | `yojana_query project="<slug>" status="..." tag="..."` |
+| Triage | `yojana_task action=update id="<slug>/<N>" status="<label>"` |
+| Ready tasks | `yojana_ready project="<slug>"` |
+| Context bundle | `yojana_context task="<slug>/<N>" shape="summary\|working"` |
+| Comment | `yojana_task action=comment id="<slug>/<N>" text="..."` |
