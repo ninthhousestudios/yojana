@@ -25,9 +25,15 @@ fn default_db_path() -> PathBuf {
     PathBuf::from(home).join(".yojana").join("yojana.db")
 }
 
-fn parse_env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+fn parse_env_or<T: std::str::FromStr + std::fmt::Debug>(name: &str, default: T) -> T {
+    match std::env::var(name) {
+        Ok(val) => match val.parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                tracing::warn!("invalid {name}={val}, using default {default:?}");
+                default
+            }
+        },
+        Err(_) => default,
+    }
 }

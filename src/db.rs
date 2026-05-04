@@ -88,15 +88,15 @@ pub struct CreateTaskParams {
 pub struct TaskUpdates {
     pub title: Option<String>,
     pub description: Option<String>,
-    pub category: Option<String>,
+    pub category: Option<Option<String>>,
     pub status: Option<String>,
-    pub slice_type: Option<String>,
+    pub slice_type: Option<Option<String>>,
     pub acceptance_criteria: Option<String>,
     pub decisions: Option<String>,
-    pub implementation_plan: Option<String>,
-    pub execution_record: Option<String>,
-    pub reproduction: Option<String>,
-    pub root_cause: Option<String>,
+    pub implementation_plan: Option<Option<String>>,
+    pub execution_record: Option<Option<String>>,
+    pub reproduction: Option<Option<String>>,
+    pub root_cause: Option<Option<String>>,
     pub context_refs: Option<String>,
     pub files: Option<String>,
     pub tags: Option<String>,
@@ -115,6 +115,10 @@ pub struct TaskQueryFilter {
     pub slice_type: Option<String>,
     pub tag: Option<String>,
 }
+
+// --- Project statuses ---
+
+const VALID_PROJECT_STATUSES: &[&str] = &["active", "paused", "archived"];
 
 // --- Edge types ---
 
@@ -415,6 +419,12 @@ impl Db {
             }
         }
         if let Some(ref new_status) = updates.status {
+            if !VALID_PROJECT_STATUSES.contains(&new_status.as_str()) {
+                return Err(YojanaError::InvalidInput(format!(
+                    "invalid project status '{new_status}'; valid: {}",
+                    VALID_PROJECT_STATUSES.join(", ")
+                )));
+            }
             if new_status != &project.status {
                 history.push(HistoryEntry {
                     ts: now,
@@ -529,41 +539,35 @@ impl Db {
 
         let new_title = updates.title.as_deref().unwrap_or(&task.title);
         let new_desc = updates.description.as_deref().unwrap_or(&task.description);
-        let new_cat = if updates.category.is_some() {
-            updates.category.as_deref()
-        } else {
-            task.category.as_deref()
+        let new_cat: Option<&str> = match &updates.category {
+            None => task.category.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
         let new_status = updates.status.as_deref().unwrap_or(&task.status);
-        let new_slice = if updates.slice_type.is_some() {
-            updates.slice_type.as_deref()
-        } else {
-            task.slice_type.as_deref()
+        let new_slice: Option<&str> = match &updates.slice_type {
+            None => task.slice_type.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
         let new_ac = updates
             .acceptance_criteria
             .as_deref()
             .unwrap_or(&task.acceptance_criteria);
         let new_dec = updates.decisions.as_deref().unwrap_or(&task.decisions);
-        let new_impl = if updates.implementation_plan.is_some() {
-            updates.implementation_plan.as_deref()
-        } else {
-            task.implementation_plan.as_deref()
+        let new_impl: Option<&str> = match &updates.implementation_plan {
+            None => task.implementation_plan.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
-        let new_exec = if updates.execution_record.is_some() {
-            updates.execution_record.as_deref()
-        } else {
-            task.execution_record.as_deref()
+        let new_exec: Option<&str> = match &updates.execution_record {
+            None => task.execution_record.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
-        let new_repro = if updates.reproduction.is_some() {
-            updates.reproduction.as_deref()
-        } else {
-            task.reproduction.as_deref()
+        let new_repro: Option<&str> = match &updates.reproduction {
+            None => task.reproduction.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
-        let new_root = if updates.root_cause.is_some() {
-            updates.root_cause.as_deref()
-        } else {
-            task.root_cause.as_deref()
+        let new_root: Option<&str> = match &updates.root_cause {
+            None => task.root_cause.as_deref(),
+            Some(inner) => inner.as_deref(),
         };
         let new_refs = updates.context_refs.as_deref().unwrap_or(&task.context_refs);
         let new_files = updates.files.as_deref().unwrap_or(&task.files);
@@ -627,8 +631,11 @@ impl Db {
             conditions.push(format!("t.slice_type = ?{}", params.len()));
         }
         if let Some(ref tag) = filter.tag {
-            params.push(Box::new(format!("%\"{tag}\"%")));
-            conditions.push(format!("t.tags LIKE ?{}", params.len()));
+            params.push(Box::new(tag.clone()));
+            conditions.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(t.tags) WHERE json_each.value = ?{})",
+                params.len()
+            ));
         }
 
         if !conditions.is_empty() {
@@ -679,6 +686,11 @@ impl Db {
                 "invalid edge_type '{edge_type}'; valid: {}",
                 VALID_EDGE_TYPES.join(", ")
             )));
+        }
+        if source_task_id == target_task_id {
+            return Err(YojanaError::InvalidInput(
+                "self-edges not allowed".into(),
+            ));
         }
 
         let conn = self.conn.lock();
@@ -774,8 +786,13 @@ impl Db {
             .optional()?;
 
         if let Some((id_bytes, messages_json)) = existing {
-            let mut messages: Vec<serde_json::Value> =
-                serde_json::from_str(&messages_json).unwrap_or_default();
+            let mut messages: Vec<serde_json::Value> = match serde_json::from_str(&messages_json) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("corrupt JSON in conversation messages: {e}");
+                    Vec::new()
+                }
+            };
             messages.push(message.clone());
             let updated_json = serde_json::to_string(&messages)?;
             conn.execute(
@@ -814,7 +831,13 @@ impl Db {
             .optional()?;
 
         match messages_json {
-            Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            Some(json) => match serde_json::from_str(&json) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::warn!("corrupt JSON in conversation messages: {e}");
+                    Ok(Vec::new())
+                }
+            },
             None => Ok(Vec::new()),
         }
     }
@@ -1053,7 +1076,7 @@ mod tests {
                 &t.id.to_string(),
                 TaskUpdates {
                     title: Some("Changed".into()),
-                    category: Some("bug".into()),
+                    category: Some(Some("bug".into())),
                     ..Default::default()
                 },
             )
@@ -1679,5 +1702,107 @@ mod tests {
         assert_eq!(bundle.neighbors[0].human_id, "proj/2");
         assert_eq!(bundle.recent_messages.len(), 1);
         assert_eq!(bundle.recent_messages[0]["text"], "started work");
+    }
+
+    #[test]
+    fn tag_filter_no_wildcard_false_positive() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+        db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug.clone(),
+            title: "Has a%b tag".into(),
+            description: String::new(),
+            category: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: serde_json::to_string(&vec!["a%b"]).unwrap(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        }).unwrap();
+
+        let matches = db.list_tasks(&TaskQueryFilter {
+            tag: Some("a%b".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(matches.len(), 1);
+
+        let no_match = db.list_tasks(&TaskQueryFilter {
+            tag: Some("axb".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(no_match.len(), 0, "LIKE wildcard should not match 'axb'");
+    }
+
+    #[test]
+    fn clear_nullable_fields_to_null() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+        let t = db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug.clone(),
+            title: "Clearable".into(),
+            description: String::new(),
+            category: Some("bug".into()),
+            slice_type: Some("AFK".into()),
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: Some("plan".into()),
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        }).unwrap();
+        assert_eq!(t.category.as_deref(), Some("bug"));
+
+        let cleared = db.update_task(&t.id.to_string(), TaskUpdates {
+            category: Some(None),
+            slice_type: Some(None),
+            implementation_plan: Some(None),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(cleared.category, None);
+        assert_eq!(cleared.slice_type, None);
+        assert_eq!(cleared.implementation_plan, None);
+    }
+
+    #[test]
+    fn project_status_validation_rejects_typo() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let err = db.update_project(None, Some("proj"), ProjectUpdates {
+            status: Some("actve".into()),
+            ..Default::default()
+        }).unwrap_err();
+        assert!(err.to_string().contains("invalid project status"));
+    }
+
+    #[test]
+    fn project_status_validation_accepts_valid() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let p = db.update_project(None, Some("proj"), ProjectUpdates {
+            status: Some("paused".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(p.status, "paused");
+    }
+
+    #[test]
+    fn self_edge_rejected() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Solo");
+        let err = db.create_edge(t.id, t.id, "relates_to", None).unwrap_err();
+        assert!(err.to_string().contains("self-edges not allowed"));
     }
 }

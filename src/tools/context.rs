@@ -35,15 +35,7 @@ pub fn handle(db: &Db, args: ContextArgs) -> Result<serde_json::Value, YojanaErr
             Ok(serde_json::to_value(bundle)?)
         }
         "working" => {
-            let nids = context::neighbor_ids(task.id, &edges);
-            let mut neighbors_with_edges = Vec::new();
-            for nid in &nids {
-                if let Some(ntask) = db.get_task(&nid.to_string())? {
-                    let nedges = db.list_edges_for_task(&ntask.id)?;
-                    neighbors_with_edges.push((ntask, nedges));
-                }
-            }
-
+            let neighbors_with_edges = load_neighbors(db, task.id, &edges)?;
             let messages = db.get_conversation_messages(&task.id)?;
 
             let bundle = context::working(
@@ -55,18 +47,26 @@ pub fn handle(db: &Db, args: ContextArgs) -> Result<serde_json::Value, YojanaErr
             Ok(serde_json::to_value(bundle)?)
         }
         "review" => {
-            let nids = context::neighbor_ids(task.id, &edges);
-            let mut neighbors_with_edges = Vec::new();
-            for nid in &nids {
-                if let Some(ntask) = db.get_task(&nid.to_string())? {
-                    let nedges = db.list_edges_for_task(&ntask.id)?;
-                    neighbors_with_edges.push((ntask, nedges));
-                }
-            }
-
+            let neighbors_with_edges = load_neighbors(db, task.id, &edges)?;
             let bundle = context::review(&task, &neighbors_with_edges);
             Ok(serde_json::to_value(bundle)?)
         }
         _ => unreachable!(),
     }
+}
+
+fn load_neighbors(
+    db: &Db,
+    task_id: uuid::Uuid,
+    edges: &[crate::db::EdgeRow],
+) -> Result<Vec<(crate::db::TaskRow, Vec<crate::db::EdgeRow>)>, YojanaError> {
+    let nids = context::neighbor_ids(task_id, edges);
+    let mut out = Vec::new();
+    for nid in &nids {
+        if let Some(ntask) = db.get_task(&nid.to_string())? {
+            let nedges = db.list_edges_for_task(&ntask.id)?;
+            out.push((ntask, nedges));
+        }
+    }
+    Ok(out)
 }

@@ -50,12 +50,24 @@ fn count_edges(task_id: Uuid, edges: &[EdgeRow]) -> HashMap<String, usize> {
 }
 
 fn last_history(task: &TaskRow) -> Option<HistoryEntry> {
-    let entries: Vec<HistoryEntry> = serde_json::from_str(&task.history).unwrap_or_default();
+    let entries: Vec<HistoryEntry> = match serde_json::from_str(&task.history) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("corrupt JSON in history: {e}");
+            return None;
+        }
+    };
     entries.into_iter().last()
 }
 
 fn json_array(s: &str) -> Vec<serde_json::Value> {
-    serde_json::from_str(s).unwrap_or_default()
+    match serde_json::from_str(s) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("corrupt JSON in field: {e}");
+            Vec::new()
+        }
+    }
 }
 
 pub fn summary(task: &TaskRow, edges: &[EdgeRow]) -> SummaryBundle {

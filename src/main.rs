@@ -77,12 +77,16 @@ async fn serve_http() -> anyhow::Result<()> {
     let config = Arc::new(Config::from_env());
     let addr: std::net::SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
 
-    if tokio::net::TcpStream::connect(&addr).await.is_ok() {
-        eprintln!("yojana already running on {addr}");
-        std::process::exit(0);
-    }
-
     let db = Arc::new(Db::open(&config).context("opening database")?);
+
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!("yojana already running on {addr}");
+            std::process::exit(0);
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let pid_path = config.pid_path();
     if let Some(parent) = pid_path.parent() {
@@ -108,18 +112,21 @@ async fn serve_http() -> anyhow::Result<()> {
 
     #[allow(deprecated)]
     let app = axum::Router::new().route("/mcp", any_service(mcp_service));
-
-    let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    cancel.cancel();
     let _ = std::fs::remove_file(&pid_path);
     Ok(())
 }
 
 async fn shutdown_signal() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        tracing::error!("failed to install CTRL+C handler: {e}");
+    let ctrl_c = tokio::signal::ctrl_c();
+    let mut term =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term.recv() => {},
     }
 }

@@ -1,9 +1,16 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
+
+fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
 
 const VALID_CATEGORIES: &[&str] = &["bug", "enhancement", "experiment"];
 const VALID_REF_TYPES: &[&str] = &[
@@ -33,14 +40,14 @@ pub struct TaskArgs {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// "bug", "enhancement", or "experiment"
-    #[serde(default)]
-    pub category: Option<String>,
+    /// "bug", "enhancement", or "experiment". Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub category: Option<Option<String>>,
     #[serde(default)]
     pub status: Option<String>,
-    /// "AFK" or "HITL"
-    #[serde(default)]
-    pub slice_type: Option<String>,
+    /// "AFK" or "HITL". Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub slice_type: Option<Option<String>>,
     #[serde(default)]
     pub acceptance_criteria: Option<Vec<serde_json::Value>>,
     #[serde(default)]
@@ -51,14 +58,18 @@ pub struct TaskArgs {
     pub files: Option<Vec<String>>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
-    #[serde(default)]
-    pub implementation_plan: Option<String>,
-    #[serde(default)]
-    pub execution_record: Option<String>,
-    #[serde(default)]
-    pub reproduction: Option<String>,
-    #[serde(default)]
-    pub root_cause: Option<String>,
+    /// Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub implementation_plan: Option<Option<String>>,
+    /// Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub execution_record: Option<Option<String>>,
+    /// Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub reproduction: Option<Option<String>>,
+    /// Pass null to clear.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub root_cause: Option<Option<String>>,
     /// Comment text (for action=comment)
     #[serde(default)]
     pub text: Option<String>,
@@ -193,10 +204,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 .title
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("title required for create".into()))?;
-            if let Some(ref cat) = args.category {
+            if let Some(Some(ref cat)) = args.category {
                 validate_category(cat)?;
             }
-            if let Some(ref st) = args.slice_type {
+            if let Some(Some(ref st)) = args.slice_type {
                 validate_slice_type(st)?;
             }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
@@ -209,17 +220,17 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 project_slug,
                 title: title.to_string(),
                 description: args.description.unwrap_or_default(),
-                category: args.category,
-                slice_type: args.slice_type,
+                category: args.category.flatten(),
+                slice_type: args.slice_type.flatten(),
                 acceptance_criteria: to_json(&args.acceptance_criteria.unwrap_or_default())?,
                 decisions: to_json(&args.decisions.unwrap_or_default())?,
                 context_refs: to_json(refs)?,
                 files: to_json(&args.files.unwrap_or_default())?,
                 tags: to_json(&args.tags.unwrap_or_default())?,
-                implementation_plan: args.implementation_plan,
-                execution_record: args.execution_record,
-                reproduction: args.reproduction,
-                root_cause: args.root_cause,
+                implementation_plan: args.implementation_plan.flatten(),
+                execution_record: args.execution_record.flatten(),
+                reproduction: args.reproduction.flatten(),
+                root_cause: args.root_cause.flatten(),
             };
             let row = db.create_task(params)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)
@@ -239,10 +250,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 .id
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("id required for update".into()))?;
-            if let Some(ref cat) = args.category {
+            if let Some(Some(ref cat)) = args.category {
                 validate_category(cat)?;
             }
-            if let Some(ref st) = args.slice_type {
+            if let Some(Some(ref st)) = args.slice_type {
                 validate_slice_type(st)?;
             }
             if let Some(ref refs) = args.context_refs {

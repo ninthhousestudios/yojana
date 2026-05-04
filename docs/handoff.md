@@ -2,23 +2,37 @@
 
 ## What's done
 
-- Slices 01 (HTTP skeleton + project CRUD) and 02 (task CRUD + sequence numbers)
-- Slice 03 (state machine) -- `src/state.rs` pure module, integrated into `Db::update_task`
-- Slice 04 (edges + cycle detection) -- `migrations/0003_edges.sql`, `src/graph.rs`, edge CRUD, `yojana_edge` MCP tool
-- Slice 05 (query + ready detection) -- `yojana_query` with filters + ready/blocked flags, `yojana_ready` shortcut tool
-- 55 tests passing
-- 5 MCP tools: yojana_project, yojana_task, yojana_edge, yojana_query, yojana_ready
+- All 8 v0 slices complete, committed, 71 tests passing
+- 6 MCP tools: yojana_project, yojana_task, yojana_edge, yojana_query, yojana_ready, yojana_context
+- 3 context shapes: summary, working, review
+- mp-skills adapter docs in place
+- Code review completed — 17 findings in docs/review-fixes-plan.md
+- **Wave 1 + Wave 2 fixes applied** (11 items total)
+
+## Wave 1 + 2 fixes completed
+
+1. Tag filter: replaced LIKE with `json_each()` for exact match
+2. Clear-to-NULL: `Option<Option<String>>` pattern on nullable TaskUpdates fields
+3. Project status validation: rejects invalid status strings
+4. Neighbor-loading helper: extracted in tools/context.rs
+5. CancellationToken: `cancel.cancel()` called after graceful shutdown
+6. SIGTERM handling: `tokio::select!` on ctrl_c + SIGTERM
+7. JSON parse warnings: `tracing::warn!` on corrupt JSON fallbacks
+8. Self-edge prevention: early check in `create_edge`
+9. State machine transitions: added re-triage and in_progress→wontfix
+10. Port env var warning: logs on invalid parse
+11. Port-binding TOCTOU: bind directly, handle AddrInUse
 
 ## Pick up next
 
-- **Slice 06 (context shapes)** -- `yojana_context` MCP tool, `summary` and `working` shapes
-- **Slice 07 (e2e integration test)** -- create project, tasks, edges, query ready, fetch context
-- **Slice 08 (mp-skills adapter)** -- wire mp-skills issue tracker to yojana backend
+- **Wave 3 fixes** (scale prep, not urgent — defer until architecture changes)
+- **First real use**: start yojana server, register the review findings as tasks in yojana itself (dog-fooding)
+- **MCP config**: add yojana to manas MCP server configs so agents can use it in sessions
 
 ## Context needed
 
-- `parking_lot::Mutex` on `Db.conn` -- Db public methods must not call other Db public methods (deadlock). Use free functions taking `&Connection` internally
-- Edge tool resolves task identifiers to UUIDs before calling `db.create_edge` to avoid deadlock
-- `list_tasks` builds SQL dynamically with positional params; tag filter uses LIKE on JSON string
-- `list_depends_on_with_status` joins edges with tasks to get target status in one query
-- Graph engine `is_ready`/`blocked_by` are pure functions over `(Uuid, Uuid, String)` tuples
+- Commit message workaround: panda breaks heredoc syntax. Use `printf ... > /tmp/file && git commit -F /tmp/file`
+- `sutra_impact` must be called before editing load-bearing files (src/tools/task.rs has blast_radius=11)
+- Db uses parking_lot::Mutex — public methods must not call other public methods (deadlock)
+- Context assembler is pure — tool handler fetches data, assembler shapes it
+- TaskUpdates nullable fields use `Option<Option<String>>`: None=keep, Some(None)=clear, Some(Some(v))=set
