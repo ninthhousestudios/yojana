@@ -1,4 +1,4 @@
-Status: needs-triage
+Status: done
 
 # 07 — End-to-end integration test
 
@@ -26,10 +26,10 @@ Test flow:
 
 ## Acceptance criteria
 
-- [ ] Test runs against an in-memory SQLite DB (no filesystem side effects)
-- [ ] All 12 steps pass
-- [ ] Test is a single Rust integration test, runnable via `cargo test`
-- [ ] No external dependencies (no HTTP server needed — tests the Store/Graph/Assembler layers directly)
+- [x] Test runs against an in-memory SQLite DB (no filesystem side effects)
+- [x] All 12 steps pass
+- [x] Test is a single Rust integration test, runnable via `cargo test`
+- [x] No external dependencies (no HTTP server needed — tests the Store/Graph/Assembler layers directly)
 
 ## Blocked by
 
