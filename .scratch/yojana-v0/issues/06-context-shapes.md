@@ -1,4 +1,4 @@
-Status: needs-triage
+Status: done
 
 # 06 — Context shapes (summary + working)
 
@@ -19,12 +19,12 @@ Add the Context assembler module, the task_conversations table, and the `yojana_
 
 ## Acceptance criteria
 
-- [ ] `yojana_context shape=summary` returns a compact bundle with title, status, slice_type, category, edge counts, last history entry
-- [ ] `yojana_context shape=working` returns acceptance_criteria, decisions, 1-hop neighbors (as summaries), recent conversation messages, and unresolved context_refs
-- [ ] Working shape's neighbor summaries use the summary shape (recursive but bounded to 1 hop)
-- [ ] Conversations are appendable and retrievable per task
-- [ ] Context assembler is testable — takes task + graph data as input, produces shaped output
-- [ ] Unknown shape names return a clear error listing valid shapes
+- [x] `yojana_context shape=summary` returns a compact bundle with title, status, slice_type, category, edge counts, last history entry
+- [x] `yojana_context shape=working` returns acceptance_criteria, decisions, 1-hop neighbors (as summaries), recent conversation messages, and unresolved context_refs
+- [x] Working shape's neighbor summaries use the summary shape (recursive but bounded to 1 hop)
+- [x] Conversations are appendable and retrievable per task
+- [x] Context assembler is testable — takes task + graph data as input, produces shaped output
+- [x] Unknown shape names return a clear error listing valid shapes
 
 ## Blocked by
 

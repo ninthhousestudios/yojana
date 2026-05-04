@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::error::YojanaError;
 use crate::tools;
+use crate::tools::context::ContextArgs;
 use crate::tools::edge::EdgeArgs;
 use crate::tools::project::ProjectArgs;
 use crate::tools::query::QueryArgs;
@@ -56,7 +57,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, get, or update tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change). Supports acceptance_criteria, decisions, context_refs as JSON arrays."
+        description = "Create, get, update, or comment on tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change), comment (requires id, text; optional author). Supports acceptance_criteria, decisions, context_refs as JSON arrays."
     )]
     pub async fn yojana_task(
         &self,
@@ -96,6 +97,17 @@ impl YojanaServer {
         Parameters(args): Parameters<ReadyArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::ready::handle(&self.db, args).map_err(err_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
+
+    #[tool(
+        description = "Get a context bundle for a task. Shapes: 'summary' (title, status, slice_type, category, edge counts, last history entry), 'working' (acceptance_criteria, decisions, 1-hop neighbor summaries, recent conversation messages, context_refs). Requires: task (UUID or 'project-slug/N'), shape."
+    )]
+    pub async fn yojana_context(
+        &self,
+        Parameters(args): Parameters<ContextArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::context::handle(&self.db, args).map_err(err_to_rmcp)?;
         serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
     }
 }

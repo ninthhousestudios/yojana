@@ -21,9 +21,9 @@ const VALID_SLICE_TYPES: &[&str] = &["AFK", "HITL"];
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TaskArgs {
-    /// Action: "create", "get", "update"
+    /// Action: "create", "get", "update", "comment"
     pub action: String,
-    /// Task UUID or "project-slug/N" (for get/update)
+    /// Task UUID or "project-slug/N" (for get/update/comment)
     #[serde(default)]
     pub id: Option<String>,
     /// Project id or slug (required for create)
@@ -59,6 +59,12 @@ pub struct TaskArgs {
     pub reproduction: Option<String>,
     #[serde(default)]
     pub root_cause: Option<String>,
+    /// Comment text (for action=comment)
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Comment author (for action=comment, defaults to "user")
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,8 +270,27 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let row = db.update_task(id, updates)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)
         }
+        "comment" => {
+            let id = args
+                .id
+                .as_deref()
+                .ok_or_else(|| YojanaError::InvalidInput("id required for comment".into()))?;
+            let text = args
+                .text
+                .as_deref()
+                .ok_or_else(|| YojanaError::InvalidInput("text required for comment".into()))?;
+            let task = db
+                .get_task(id)?
+                .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
+            let message =
+                db.append_conversation_message(&task.id, text, args.author.as_deref())?;
+            Ok(serde_json::json!({
+                "task": format!("{}/{}", task.project_slug, task.sequence_number),
+                "message": message,
+            }))
+        }
         other => Err(YojanaError::InvalidInput(format!(
-            "unknown action '{other}'; valid: create, get, update"
+            "unknown action '{other}'; valid: create, get, update, comment"
         ))),
     }
 }

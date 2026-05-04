@@ -313,7 +313,8 @@ impl Db {
         let conn = self.conn.lock();
         conn.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
         conn.execute_batch(include_str!("../migrations/0002_tasks.sql"))?;
-        conn.execute_batch(include_str!("../migrations/0003_edges.sql"))
+        conn.execute_batch(include_str!("../migrations/0003_edges.sql"))?;
+        conn.execute_batch(include_str!("../migrations/0004_conversations.sql"))
     }
 
     // --- Project methods ---
@@ -745,6 +746,77 @@ impl Db {
             .query_map(rusqlite::params![task_id.as_bytes().as_slice()], map_edge_row)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // --- Conversation methods ---
+
+    pub fn append_conversation_message(
+        &self,
+        task_id: &Uuid,
+        text: &str,
+        author: Option<&str>,
+    ) -> Result<serde_json::Value, YojanaError> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        let message = serde_json::json!({
+            "ts": now,
+            "text": text,
+            "author": author.unwrap_or("user"),
+        });
+
+        let existing: Option<(Vec<u8>, String)> = conn
+            .prepare("SELECT id, messages FROM task_conversations WHERE task_id = ?1")?
+            .query_row(
+                rusqlite::params![task_id.as_bytes().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+
+        if let Some((id_bytes, messages_json)) = existing {
+            let mut messages: Vec<serde_json::Value> =
+                serde_json::from_str(&messages_json).unwrap_or_default();
+            messages.push(message.clone());
+            let updated_json = serde_json::to_string(&messages)?;
+            conn.execute(
+                "UPDATE task_conversations SET messages = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![updated_json, now, id_bytes],
+            )?;
+        } else {
+            let id = Uuid::now_v7();
+            let messages_json = serde_json::to_string(&vec![&message])?;
+            conn.execute(
+                "INSERT INTO task_conversations (id, task_id, messages, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                rusqlite::params![
+                    id.as_bytes().as_slice(),
+                    task_id.as_bytes().as_slice(),
+                    messages_json,
+                    now,
+                ],
+            )?;
+        }
+
+        Ok(message)
+    }
+
+    pub fn get_conversation_messages(
+        &self,
+        task_id: &Uuid,
+    ) -> Result<Vec<serde_json::Value>, YojanaError> {
+        let conn = self.conn.lock();
+        let messages_json: Option<String> = conn
+            .prepare("SELECT messages FROM task_conversations WHERE task_id = ?1")?
+            .query_row(
+                rusqlite::params![task_id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match messages_json {
+            Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
     }
 }
 
@@ -1515,5 +1587,97 @@ mod tests {
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(leaf.id, &deps));
+    }
+
+    // --- Slice 06: conversations ---
+
+    #[test]
+    fn append_and_get_conversation() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+
+        let msgs = db.get_conversation_messages(&t.id).unwrap();
+        assert!(msgs.is_empty());
+
+        let m1 = db.append_conversation_message(&t.id, "hello", Some("agent")).unwrap();
+        assert_eq!(m1["text"], "hello");
+        assert_eq!(m1["author"], "agent");
+
+        let m2 = db.append_conversation_message(&t.id, "world", None).unwrap();
+        assert_eq!(m2["text"], "world");
+        assert_eq!(m2["author"], "user");
+
+        let msgs = db.get_conversation_messages(&t.id).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["text"], "hello");
+        assert_eq!(msgs[1]["text"], "world");
+    }
+
+    #[test]
+    fn conversation_cascade_on_task_delete() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+        db.append_conversation_message(&t.id, "msg", None).unwrap();
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "DELETE FROM tasks WHERE id = ?1",
+                rusqlite::params![t.id.as_bytes().as_slice()],
+            ).unwrap();
+        }
+
+        let msgs = db.get_conversation_messages(&t.id).unwrap();
+        assert!(msgs.is_empty());
+    }
+
+    // --- Slice 06: context integration ---
+
+    #[test]
+    fn context_summary_integration() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Main Task");
+        let t2 = create_test_task(&db, "proj", "Dep");
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        let bundle = crate::context::summary(&t1, &edges);
+
+        assert_eq!(bundle.human_id, "proj/1");
+        assert_eq!(bundle.title, "Main Task");
+        assert_eq!(bundle.edge_counts.get("depends_on_out"), Some(&1));
+    }
+
+    #[test]
+    fn context_working_integration() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Main");
+        let t2 = create_test_task(&db, "proj", "Neighbor");
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+        db.append_conversation_message(&t1.id, "started work", Some("agent")).unwrap();
+
+        let edges = db.list_edges_for_task(&t1.id).unwrap();
+        let nids = crate::context::neighbor_ids(t1.id, &edges);
+        assert_eq!(nids.len(), 1);
+
+        let mut neighbors_with_edges = Vec::new();
+        for nid in &nids {
+            let ntask = db.get_task(&nid.to_string()).unwrap().unwrap();
+            let nedges = db.list_edges_for_task(&ntask.id).unwrap();
+            neighbors_with_edges.push((ntask, nedges));
+        }
+
+        let messages = db.get_conversation_messages(&t1.id).unwrap();
+        let bundle = crate::context::working(&t1, &neighbors_with_edges, &messages, 10);
+
+        assert_eq!(bundle.human_id, "proj/1");
+        assert_eq!(bundle.neighbors.len(), 1);
+        assert_eq!(bundle.neighbors[0].human_id, "proj/2");
+        assert_eq!(bundle.recent_messages.len(), 1);
+        assert_eq!(bundle.recent_messages[0]["text"], "started work");
     }
 }
