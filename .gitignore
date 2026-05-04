@@ -1,2 +1,6 @@
 /target
 /.yojana
+.sutra/
+
+# AgentOps session artifacts
+.agents/

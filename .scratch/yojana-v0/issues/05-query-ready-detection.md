@@ -1,4 +1,4 @@
-Status: needs-triage
+Status: done
 
 # 05 — Query + ready detection
 

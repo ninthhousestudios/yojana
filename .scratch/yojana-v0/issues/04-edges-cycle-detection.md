@@ -1,4 +1,4 @@
-Status: needs-triage
+Status: done
 
 # 04 — Edges + cycle detection
 
