@@ -53,6 +53,22 @@ fn dfs(
     false
 }
 
+pub fn is_ready(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, String)]) -> bool {
+    let my_deps: Vec<_> = deps_with_status
+        .iter()
+        .filter(|(src, _, _)| *src == task_id)
+        .collect();
+    my_deps.iter().all(|(_, _, status)| status == "done")
+}
+
+pub fn blocked_by(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec<Uuid> {
+    deps_with_status
+        .iter()
+        .filter(|(src, _, status)| *src == task_id && status != "done")
+        .map(|(_, tgt, _)| *tgt)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +115,50 @@ mod tests {
     #[test]
     fn empty_graph_no_cycle() {
         assert!(would_cycle(&[], id(1), id(2)).is_ok());
+    }
+
+    #[test]
+    fn ready_no_deps() {
+        let deps: Vec<(Uuid, Uuid, String)> = vec![];
+        assert!(is_ready(id(1), &deps));
+    }
+
+    #[test]
+    fn ready_all_deps_done() {
+        let deps = vec![
+            (id(1), id(2), "done".into()),
+            (id(1), id(3), "done".into()),
+        ];
+        assert!(is_ready(id(1), &deps));
+    }
+
+    #[test]
+    fn not_ready_some_deps_pending() {
+        let deps = vec![
+            (id(1), id(2), "done".into()),
+            (id(1), id(3), "in_progress".into()),
+        ];
+        assert!(!is_ready(id(1), &deps));
+    }
+
+    #[test]
+    fn blocked_by_returns_incomplete() {
+        let deps = vec![
+            (id(1), id(2), "done".into()),
+            (id(1), id(3), "in_progress".into()),
+            (id(1), id(4), "needs-triage".into()),
+        ];
+        let blockers = blocked_by(id(1), &deps);
+        assert_eq!(blockers.len(), 2);
+        assert!(blockers.contains(&id(3)));
+        assert!(blockers.contains(&id(4)));
+    }
+
+    #[test]
+    fn ready_ignores_other_tasks_deps() {
+        let deps = vec![
+            (id(2), id(3), "in_progress".into()),
+        ];
+        assert!(is_ready(id(1), &deps));
     }
 }

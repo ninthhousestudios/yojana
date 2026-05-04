@@ -107,6 +107,15 @@ enum TaskIdentifier {
     SlugSeq(String, i64),
 }
 
+#[derive(Debug, Default)]
+pub struct TaskQueryFilter {
+    pub project_id: Option<Uuid>,
+    pub status: Option<String>,
+    pub category: Option<String>,
+    pub slice_type: Option<String>,
+    pub tag: Option<String>,
+}
+
 // --- Edge types ---
 
 pub const VALID_EDGE_TYPES: &[&str] =
@@ -590,6 +599,69 @@ impl Db {
 
         get_task_by_uuid(&conn, &task.id)?
             .ok_or_else(|| YojanaError::NotFound("updated task".into()))
+    }
+
+    // --- Query methods ---
+
+    pub fn list_tasks(&self, filter: &TaskQueryFilter) -> Result<Vec<TaskRow>, YojanaError> {
+        let conn = self.conn.lock();
+        let mut sql = String::from(TASK_SELECT);
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref project_id) = filter.project_id {
+            params.push(Box::new(project_id.as_bytes().to_vec()));
+            conditions.push(format!("t.project_id = ?{}", params.len()));
+        }
+        if let Some(ref status) = filter.status {
+            params.push(Box::new(status.clone()));
+            conditions.push(format!("t.status = ?{}", params.len()));
+        }
+        if let Some(ref category) = filter.category {
+            params.push(Box::new(category.clone()));
+            conditions.push(format!("t.category = ?{}", params.len()));
+        }
+        if let Some(ref slice_type) = filter.slice_type {
+            params.push(Box::new(slice_type.clone()));
+            conditions.push(format!("t.slice_type = ?{}", params.len()));
+        }
+        if let Some(ref tag) = filter.tag {
+            params.push(Box::new(format!("%\"{tag}\"%")));
+            conditions.push(format!("t.tags LIKE ?{}", params.len()));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY t.updated_at DESC");
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), map_task_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_depends_on_with_status(
+        &self,
+    ) -> Result<Vec<(Uuid, Uuid, String)>, YojanaError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT e.source_task_id, e.target_task_id, t.status \
+             FROM task_edges e JOIN tasks t ON e.target_task_id = t.id \
+             WHERE e.edge_type = 'depends_on'",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let src = uuid_from_blob(row, "source_task_id")?;
+                let tgt = uuid_from_blob(row, "target_task_id")?;
+                let status: String = row.get("status")?;
+                Ok((src, tgt, status))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     // --- Edge methods ---
@@ -1263,5 +1335,185 @@ mod tests {
         assert!(edges.is_empty());
         let edges = db.list_edges_for_task(&t3.id).unwrap();
         assert!(edges.is_empty());
+    }
+
+    // --- Slice 05: query + ready detection ---
+
+    fn advance_to(db: &Db, id: &str, statuses: &[&str]) {
+        for s in statuses {
+            db.update_task(id, TaskUpdates { status: Some((*s).into()), ..Default::default() }).unwrap();
+        }
+    }
+
+    #[test]
+    fn list_tasks_no_filter() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        create_test_task(&db, "proj", "A");
+        create_test_task(&db, "proj", "B");
+
+        let tasks = db.list_tasks(&TaskQueryFilter::default()).unwrap();
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn list_tasks_filter_by_status() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "A");
+        create_test_task(&db, "proj", "B");
+
+        advance_to(&db, &t1.id.to_string(), &["ready-for-agent"]);
+
+        let tasks = db.list_tasks(&TaskQueryFilter {
+            status: Some("ready-for-agent".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "A");
+    }
+
+    #[test]
+    fn list_tasks_filter_by_project() {
+        let db = test_db();
+        let p1 = db.create_project("alpha", "Alpha", "").unwrap();
+        db.create_project("beta", "Beta", "").unwrap();
+        create_test_task(&db, "alpha", "A");
+        create_test_task(&db, "beta", "B");
+
+        let tasks = db.list_tasks(&TaskQueryFilter {
+            project_id: Some(p1.id),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "A");
+    }
+
+    #[test]
+    fn list_tasks_filter_by_tag() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+        db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug.clone(),
+            title: "Tagged".into(),
+            description: String::new(),
+            category: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: serde_json::to_string(&vec!["infra"]).unwrap(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        }).unwrap();
+        create_test_task(&db, "proj", "Untagged");
+
+        let tasks = db.list_tasks(&TaskQueryFilter {
+            tag: Some("infra".into()),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Tagged");
+    }
+
+    #[test]
+    fn cross_project_query() {
+        let db = test_db();
+        db.create_project("alpha", "Alpha", "").unwrap();
+        db.create_project("beta", "Beta", "").unwrap();
+        create_test_task(&db, "alpha", "A");
+        create_test_task(&db, "beta", "B");
+
+        let tasks = db.list_tasks(&TaskQueryFilter::default()).unwrap();
+        assert_eq!(tasks.len(), 2);
+    }
+
+    #[test]
+    fn depends_on_with_status() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "A");
+        let t2 = create_test_task(&db, "proj", "B");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].0, t1.id);
+        assert_eq!(deps[0].1, t2.id);
+        assert_eq!(deps[0].2, "needs-triage");
+    }
+
+    #[test]
+    fn ready_detection_no_deps() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "A");
+        let id = t.id.to_string();
+        advance_to(&db, &id, &["ready-for-agent"]);
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert!(crate::graph::is_ready(t.id, &deps));
+    }
+
+    #[test]
+    fn ready_detection_deps_done() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Depends");
+        let t2 = create_test_task(&db, "proj", "Dependency");
+
+        let id1 = t1.id.to_string();
+        let id2 = t2.id.to_string();
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+
+        advance_to(&db, &id1, &["ready-for-agent"]);
+        advance_to(&db, &id2, &["ready-for-agent", "in_progress", "done"]);
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert!(crate::graph::is_ready(t1.id, &deps));
+    }
+
+    #[test]
+    fn ready_detection_deps_not_done() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t1 = create_test_task(&db, "proj", "Depends");
+        let t2 = create_test_task(&db, "proj", "Dependency");
+
+        db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert!(!crate::graph::is_ready(t1.id, &deps));
+    }
+
+    #[test]
+    fn ready_detection_diamond() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let leaf = create_test_task(&db, "proj", "Leaf");
+        let mid1 = create_test_task(&db, "proj", "Mid1");
+        let mid2 = create_test_task(&db, "proj", "Mid2");
+
+        db.create_edge(leaf.id, mid1.id, "depends_on", None).unwrap();
+        db.create_edge(leaf.id, mid2.id, "depends_on", None).unwrap();
+
+        let mid1_id = mid1.id.to_string();
+        let mid2_id = mid2.id.to_string();
+        advance_to(&db, &mid1_id, &["ready-for-agent", "in_progress", "done"]);
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert!(!crate::graph::is_ready(leaf.id, &deps));
+
+        advance_to(&db, &mid2_id, &["ready-for-agent", "in_progress", "done"]);
+
+        let deps = db.list_depends_on_with_status().unwrap();
+        assert!(crate::graph::is_ready(leaf.id, &deps));
     }
 }
