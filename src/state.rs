@@ -31,7 +31,7 @@ pub fn validate_transition(from: &str, to: &str) -> Result<(), YojanaError> {
     }
 
     let allowed: &[&str] = match from {
-        "needs-triage" => &["needs-info", "ready-for-agent", "ready-for-human", "wontfix"],
+        "needs-triage" => &["needs-info", "ready-for-agent", "ready-for-human", "in-progress", "wontfix"],
         "needs-info" => &["needs-triage", "ready-for-agent", "ready-for-human", "wontfix"],
         "ready-for-agent" => &["in-progress", "needs-triage", "ready-for-human"],
         "ready-for-human" => &["in-progress", "needs-triage", "ready-for-agent"],
@@ -65,6 +65,7 @@ mod tests {
             ("needs-triage", "needs-info"),
             ("needs-triage", "ready-for-agent"),
             ("needs-triage", "ready-for-human"),
+            ("needs-triage", "in-progress"),
             ("needs-triage", "wontfix"),
             ("needs-info", "needs-triage"),
             ("needs-info", "ready-for-agent"),
@@ -98,7 +99,6 @@ mod tests {
             ("wontfix", "done"),
             ("in-progress", "ready-for-agent"),
             ("ready-for-agent", "done"),
-            ("needs-triage", "in-progress"),
             ("needs-triage", "done"),
         ];
         for (from, to) in cases {

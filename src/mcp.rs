@@ -116,7 +116,7 @@ impl YojanaServer {
 impl ServerHandler for YojanaServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("yojana v0.1.0 — task graph server for the manas ecosystem. Tracks projects, tasks, dependencies, and context shapes.")
+            .with_instructions("yojana v0.2.0 — task graph server for the manas ecosystem. Tracks projects, tasks, dependencies, and context shapes.")
     }
 }
 
