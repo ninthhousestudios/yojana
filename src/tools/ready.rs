@@ -40,21 +40,21 @@ impl From<TaskRow> for ReadyItem {
     }
 }
 
-fn resolve_project_id(db: &Db, project: &str) -> Result<Uuid, YojanaError> {
+fn resolve_project_ids(db: &Db, project: &str) -> Result<Vec<Uuid>, YojanaError> {
     let row = if Uuid::parse_str(project).is_ok() {
         db.get_project(Some(project), None)?
     } else {
         db.get_project(None, Some(project))?
     };
     let row = row.ok_or_else(|| YojanaError::NotFound(format!("project '{project}'")))?;
-    Ok(row.id)
+    db.project_ids_with_descendants(&row.id)
 }
 
 pub fn handle(db: &Db, args: ReadyArgs) -> Result<serde_json::Value, YojanaError> {
-    let project_id = args
+    let project_ids = args
         .project
         .as_deref()
-        .map(|p| resolve_project_id(db, p))
+        .map(|p| resolve_project_ids(db, p))
         .transpose()?;
 
     let deps = db.list_depends_on_with_status()?;
@@ -63,7 +63,7 @@ pub fn handle(db: &Db, args: ReadyArgs) -> Result<serde_json::Value, YojanaError
 
     for status in &["ready-for-agent", "ready-for-human"] {
         let filter = TaskQueryFilter {
-            project_id,
+            project_ids: project_ids.clone(),
             status: Some((*status).to_string()),
             ..Default::default()
         };

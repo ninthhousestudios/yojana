@@ -46,14 +46,14 @@ pub struct QueryResultItem {
     pub updated_at: i64,
 }
 
-fn resolve_project_id(db: &Db, project: &str) -> Result<Uuid, YojanaError> {
+fn resolve_project_ids(db: &Db, project: &str) -> Result<Vec<Uuid>, YojanaError> {
     let row = if Uuid::parse_str(project).is_ok() {
         db.get_project(Some(project), None)?
     } else {
         db.get_project(None, Some(project))?
     };
     let row = row.ok_or_else(|| YojanaError::NotFound(format!("project '{project}'")))?;
-    Ok(row.id)
+    db.project_ids_with_descendants(&row.id)
 }
 
 fn enrich(tasks: Vec<TaskRow>, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec<QueryResultItem> {
@@ -85,14 +85,14 @@ fn is_ready_status(status: &str) -> bool {
 }
 
 pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError> {
-    let project_id = args
+    let project_ids = args
         .project
         .as_deref()
-        .map(|p| resolve_project_id(db, p))
+        .map(|p| resolve_project_ids(db, p))
         .transpose()?;
 
     let filter = TaskQueryFilter {
-        project_id,
+        project_ids,
         status: args.status,
         category: args.category,
         slice_type: args.slice_type,

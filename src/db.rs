@@ -27,6 +27,7 @@ pub struct ProjectRow {
     pub title: String,
     pub description: String,
     pub status: String,
+    pub parent_id: Option<Uuid>,
     pub history: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -111,7 +112,7 @@ pub const DEFAULT_PAGE_LIMIT: i64 = 100;
 
 #[derive(Debug, Default)]
 pub struct TaskQueryFilter {
-    pub project_id: Option<Uuid>,
+    pub project_ids: Option<Vec<Uuid>>,
     pub status: Option<String>,
     pub category: Option<String>,
     pub slice_type: Option<String>,
@@ -146,12 +147,21 @@ fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
     let id = Uuid::from_slice(&id_bytes).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
     })?;
+    let parent_id = row
+        .get::<_, Option<Vec<u8>>>("parent_id")?
+        .map(|bytes| {
+            Uuid::from_slice(&bytes).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+            })
+        })
+        .transpose()?;
     Ok(ProjectRow {
         id,
         slug: row.get("slug")?,
         title: row.get("title")?,
         description: row.get("description")?,
         status: row.get("status")?,
+        parent_id,
         history: row.get("history")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -324,6 +334,7 @@ impl Db {
             ("0003_edges", include_str!("../migrations/0003_edges.sql")),
             ("0004_conversations", include_str!("../migrations/0004_conversations.sql")),
             ("0005_in_progress_rename", include_str!("../migrations/0005_in-progress-rename.sql")),
+            ("0006_parent_projects", include_str!("../migrations/0006_parent-projects.sql")),
         ];
 
         let conn = self.conn.lock();
@@ -360,6 +371,7 @@ impl Db {
         slug: &str,
         title: &str,
         description: &str,
+        parent_id: Option<Uuid>,
     ) -> Result<ProjectRow, YojanaError> {
         let conn = self.conn.lock();
         let id = Uuid::now_v7();
@@ -370,10 +382,11 @@ impl Db {
             payload: serde_json::json!({}),
         }])?;
 
+        let parent_bytes = parent_id.map(|pid| pid.as_bytes().to_vec());
         conn.execute(
-            "INSERT INTO projects (id, slug, title, description, status, history, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?6)",
-            rusqlite::params![id.as_bytes().as_slice(), slug, title, description, history, now],
+            "INSERT INTO projects (id, slug, title, description, status, parent_id, history, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?7)",
+            rusqlite::params![id.as_bytes().as_slice(), slug, title, description, parent_bytes, history, now],
         )
         .map_err(|e| {
             if let rusqlite::Error::SqliteFailure(ref err, _) = e {
@@ -406,28 +419,88 @@ impl Db {
         Err(YojanaError::InvalidInput("id or slug required".into()))
     }
 
+    /// List projects with optional filters.
+    /// `parent_filter`: None = no parent filter, Some(None) = roots only, Some(Some(id)) = children of id.
     pub fn list_projects(
         &self,
         status: Option<&str>,
+        parent_filter: Option<Option<&Uuid>>,
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<Vec<ProjectRow>, YojanaError> {
         let conn = self.conn.lock();
         let lim = limit.unwrap_or(DEFAULT_PAGE_LIMIT);
         let off = offset.unwrap_or(0);
-        let rows = if let Some(status) = status {
-            let mut stmt = conn.prepare(
-                "SELECT * FROM projects WHERE status = ?1 ORDER BY created_at LIMIT ?2 OFFSET ?3",
-            )?;
-            stmt.query_map(rusqlite::params![status, lim, off], map_project_row)?
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let mut stmt =
-                conn.prepare("SELECT * FROM projects ORDER BY created_at LIMIT ?1 OFFSET ?2")?;
-            stmt.query_map(rusqlite::params![lim, off], map_project_row)?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+
+        let mut sql = String::from("SELECT * FROM projects");
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(status) = status {
+            params.push(Box::new(status.to_string()));
+            conditions.push(format!("status = ?{}", params.len()));
+        }
+
+        match parent_filter {
+            Some(None) => {
+                conditions.push("parent_id IS NULL".to_string());
+            }
+            Some(Some(pid)) => {
+                params.push(Box::new(pid.as_bytes().to_vec()));
+                conditions.push(format!("parent_id = ?{}", params.len()));
+            }
+            None => {}
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY created_at");
+
+        params.push(Box::new(lim));
+        sql.push_str(&format!(" LIMIT ?{}", params.len()));
+        params.push(Box::new(off));
+        sql.push_str(&format!(" OFFSET ?{}", params.len()));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), map_project_row)?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn list_descendant_project_ids(&self, root_id: &Uuid) -> Result<Vec<Uuid>, YojanaError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "WITH RECURSIVE descendants(id) AS (
+                SELECT id FROM projects WHERE parent_id = ?1
+                UNION ALL
+                SELECT p.id FROM projects p JOIN descendants d ON p.parent_id = d.id
+            )
+            SELECT id FROM descendants",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![root_id.as_bytes().as_slice()], |row| {
+                let bytes: Vec<u8> = row.get(0)?;
+                Ok(bytes)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut ids = Vec::with_capacity(rows.len());
+        for bytes in rows {
+            let id = Uuid::from_slice(&bytes)
+                .map_err(|e| YojanaError::Internal(format!("invalid uuid in descendants: {e}")))?;
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
+    pub fn project_ids_with_descendants(&self, project_id: &Uuid) -> Result<Vec<Uuid>, YojanaError> {
+        let mut ids = vec![*project_id];
+        ids.extend(self.list_descendant_project_ids(project_id)?);
+        Ok(ids)
     }
 
     pub fn update_project(
@@ -655,9 +728,20 @@ impl Db {
         let mut conditions: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-        if let Some(ref project_id) = filter.project_id {
-            params.push(Box::new(project_id.as_bytes().to_vec()));
-            conditions.push(format!("t.project_id = ?{}", params.len()));
+        if let Some(ref project_ids) = filter.project_ids {
+            if project_ids.len() == 1 {
+                params.push(Box::new(project_ids[0].as_bytes().to_vec()));
+                conditions.push(format!("t.project_id = ?{}", params.len()));
+            } else if !project_ids.is_empty() {
+                let placeholders: Vec<String> = project_ids
+                    .iter()
+                    .map(|pid| {
+                        params.push(Box::new(pid.as_bytes().to_vec()));
+                        format!("?{}", params.len())
+                    })
+                    .collect();
+                conditions.push(format!("t.project_id IN ({})", placeholders.join(", ")));
+            }
         }
         if let Some(ref status) = filter.status {
             params.push(Box::new(status.clone()));
@@ -943,7 +1027,7 @@ mod tests {
     #[test]
     fn create_and_get_project() {
         let db = test_db();
-        let p = db.create_project("test-proj", "Test Project", "A test").unwrap();
+        let p = db.create_project("test-proj", "Test Project", "A test", None).unwrap();
         assert_eq!(p.slug, "test-proj");
         assert_eq!(p.title, "Test Project");
         assert_eq!(p.description, "A test");
@@ -959,31 +1043,31 @@ mod tests {
     #[test]
     fn slug_uniqueness() {
         let db = test_db();
-        db.create_project("dupe", "First", "").unwrap();
-        let err = db.create_project("dupe", "Second", "").unwrap_err();
+        db.create_project("dupe", "First", "", None).unwrap();
+        let err = db.create_project("dupe", "Second", "", None).unwrap_err();
         assert!(matches!(err, YojanaError::Conflict(_)));
     }
 
     #[test]
     fn list_with_status_filter() {
         let db = test_db();
-        db.create_project("a", "A", "").unwrap();
-        db.create_project("b", "B", "").unwrap();
+        db.create_project("a", "A", "", None).unwrap();
+        db.create_project("b", "B", "", None).unwrap();
 
-        let all = db.list_projects(None, None, None).unwrap();
+        let all = db.list_projects(None, None, None, None).unwrap();
         assert_eq!(all.len(), 2);
 
-        let active = db.list_projects(Some("active"), None, None).unwrap();
+        let active = db.list_projects(Some("active"), None, None, None).unwrap();
         assert_eq!(active.len(), 2);
 
-        let paused = db.list_projects(Some("paused"), None, None).unwrap();
+        let paused = db.list_projects(Some("paused"), None, None, None).unwrap();
         assert_eq!(paused.len(), 0);
     }
 
     #[test]
     fn update_records_history() {
         let db = test_db();
-        let p = db.create_project("test", "Original", "desc").unwrap();
+        let p = db.create_project("test", "Original", "desc", None).unwrap();
 
         let updated = db
             .update_project(
@@ -1007,7 +1091,7 @@ mod tests {
     #[test]
     fn update_status_records_history() {
         let db = test_db();
-        db.create_project("test", "Test", "").unwrap();
+        db.create_project("test", "Test", "", None).unwrap();
 
         let updated = db
             .update_project(
@@ -1064,7 +1148,7 @@ mod tests {
     #[test]
     fn create_task_with_sequence_numbers() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
 
         let t1 = create_test_task(&db, "proj", "First");
         let t2 = create_test_task(&db, "proj", "Second");
@@ -1080,8 +1164,8 @@ mod tests {
     #[test]
     fn sequence_numbers_are_per_project() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "").unwrap();
-        db.create_project("beta", "Beta", "").unwrap();
+        db.create_project("alpha", "Alpha", "", None).unwrap();
+        db.create_project("beta", "Beta", "", None).unwrap();
 
         let a1 = create_test_task(&db, "alpha", "A1");
         let b1 = create_test_task(&db, "beta", "B1");
@@ -1095,7 +1179,7 @@ mod tests {
     #[test]
     fn get_task_by_uuid() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let fetched = db.get_task(&t.id.to_string()).unwrap().unwrap();
@@ -1106,7 +1190,7 @@ mod tests {
     #[test]
     fn get_task_by_slug_seq() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         create_test_task(&db, "proj", "First");
         let t2 = create_test_task(&db, "proj", "Second");
 
@@ -1118,7 +1202,7 @@ mod tests {
     #[test]
     fn update_task_partial() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Original");
 
         let updated = db
@@ -1140,7 +1224,7 @@ mod tests {
     #[test]
     fn json_round_trip() {
         let db = test_db();
-        let p = db.create_project("proj", "Project", "").unwrap();
+        let p = db.create_project("proj", "Project", "", None).unwrap();
 
         let ac = serde_json::to_string(&vec![
             serde_json::json!({"id": "1", "text": "it works", "done": false}),
@@ -1193,7 +1277,7 @@ mod tests {
     #[test]
     fn cascade_delete_project_removes_tasks() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let task_id = t.id.to_string();
 
@@ -1218,7 +1302,7 @@ mod tests {
     #[test]
     fn valid_status_transition_succeeds() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
         assert_eq!(t.status, "needs-triage");
 
@@ -1246,7 +1330,7 @@ mod tests {
     #[test]
     fn invalid_status_transition_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let err = db
@@ -1264,7 +1348,7 @@ mod tests {
     #[test]
     fn noop_status_update_skips_validation() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let updated = db
@@ -1287,7 +1371,7 @@ mod tests {
     #[test]
     fn non_status_update_bypasses_state_machine() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let updated = db
@@ -1306,7 +1390,7 @@ mod tests {
     #[test]
     fn done_is_terminal_except_reopen() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
 
@@ -1326,7 +1410,7 @@ mod tests {
     #[test]
     fn create_and_list_edges() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1348,7 +1432,7 @@ mod tests {
     #[test]
     fn delete_edge() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1370,7 +1454,7 @@ mod tests {
     #[test]
     fn duplicate_edge_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1382,7 +1466,7 @@ mod tests {
     #[test]
     fn same_pair_different_types_allowed() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1396,7 +1480,7 @@ mod tests {
     #[test]
     fn cycle_detection_rejects_direct_cycle() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1408,7 +1492,7 @@ mod tests {
     #[test]
     fn cycle_detection_rejects_multi_hop() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
         let t3 = create_test_task(&db, "proj", "Task 3");
@@ -1422,7 +1506,7 @@ mod tests {
     #[test]
     fn non_dependency_edges_skip_cycle_check() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1433,7 +1517,7 @@ mod tests {
     #[test]
     fn invalid_edge_type_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -1444,8 +1528,8 @@ mod tests {
     #[test]
     fn cross_project_edges() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "").unwrap();
-        db.create_project("beta", "Beta", "").unwrap();
+        db.create_project("alpha", "Alpha", "", None).unwrap();
+        db.create_project("beta", "Beta", "", None).unwrap();
         let t1 = create_test_task(&db, "alpha", "Task A");
         let t2 = create_test_task(&db, "beta", "Task B");
 
@@ -1459,7 +1543,7 @@ mod tests {
     #[test]
     fn cascade_delete_task_removes_edges() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
         let t3 = create_test_task(&db, "proj", "Task 3");
@@ -1493,7 +1577,7 @@ mod tests {
     #[test]
     fn list_tasks_no_filter() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         create_test_task(&db, "proj", "A");
         create_test_task(&db, "proj", "B");
 
@@ -1504,7 +1588,7 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "A");
         create_test_task(&db, "proj", "B");
 
@@ -1521,13 +1605,13 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_project() {
         let db = test_db();
-        let p1 = db.create_project("alpha", "Alpha", "").unwrap();
-        db.create_project("beta", "Beta", "").unwrap();
+        let p1 = db.create_project("alpha", "Alpha", "", None).unwrap();
+        db.create_project("beta", "Beta", "", None).unwrap();
         create_test_task(&db, "alpha", "A");
         create_test_task(&db, "beta", "B");
 
         let tasks = db.list_tasks(&TaskQueryFilter {
-            project_id: Some(p1.id),
+            project_ids: Some(vec![p1.id]),
             ..Default::default()
         }).unwrap();
         assert_eq!(tasks.len(), 1);
@@ -1537,7 +1621,7 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_tag() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         db.create_task(CreateTaskParams {
             project_id: p.id,
@@ -1569,8 +1653,8 @@ mod tests {
     #[test]
     fn cross_project_query() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "").unwrap();
-        db.create_project("beta", "Beta", "").unwrap();
+        db.create_project("alpha", "Alpha", "", None).unwrap();
+        db.create_project("beta", "Beta", "", None).unwrap();
         create_test_task(&db, "alpha", "A");
         create_test_task(&db, "beta", "B");
 
@@ -1581,7 +1665,7 @@ mod tests {
     #[test]
     fn depends_on_with_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "A");
         let t2 = create_test_task(&db, "proj", "B");
 
@@ -1597,7 +1681,7 @@ mod tests {
     #[test]
     fn ready_detection_no_deps() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "A");
         let id = t.id.to_string();
         advance_to(&db, &id, &["ready-for-agent"]);
@@ -1609,7 +1693,7 @@ mod tests {
     #[test]
     fn ready_detection_deps_done() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Depends");
         let t2 = create_test_task(&db, "proj", "Dependency");
 
@@ -1628,7 +1712,7 @@ mod tests {
     #[test]
     fn ready_detection_deps_not_done() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Depends");
         let t2 = create_test_task(&db, "proj", "Dependency");
 
@@ -1641,7 +1725,7 @@ mod tests {
     #[test]
     fn ready_detection_diamond() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let leaf = create_test_task(&db, "proj", "Leaf");
         let mid1 = create_test_task(&db, "proj", "Mid1");
         let mid2 = create_test_task(&db, "proj", "Mid2");
@@ -1667,7 +1751,7 @@ mod tests {
     #[test]
     fn append_and_get_conversation() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let msgs = db.get_conversation_messages(&t.id).unwrap();
@@ -1690,7 +1774,7 @@ mod tests {
     #[test]
     fn conversation_cascade_on_task_delete() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
         db.append_conversation_message(&t.id, "msg", None).unwrap();
 
@@ -1711,7 +1795,7 @@ mod tests {
     #[test]
     fn context_summary_integration() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Main Task");
         let t2 = create_test_task(&db, "proj", "Dep");
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
@@ -1727,7 +1811,7 @@ mod tests {
     #[test]
     fn context_working_integration() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t1 = create_test_task(&db, "proj", "Main");
         let t2 = create_test_task(&db, "proj", "Neighbor");
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
@@ -1757,7 +1841,7 @@ mod tests {
     #[test]
     fn tag_filter_no_wildcard_false_positive() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         db.create_task(CreateTaskParams {
             project_id: p.id,
@@ -1793,7 +1877,7 @@ mod tests {
     #[test]
     fn clear_nullable_fields_to_null() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         let t = db.create_task(CreateTaskParams {
             project_id: p.id,
@@ -1828,7 +1912,7 @@ mod tests {
     #[test]
     fn project_status_validation_rejects_typo() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let err = db.update_project(None, Some("proj"), ProjectUpdates {
             status: Some("actve".into()),
             ..Default::default()
@@ -1839,7 +1923,7 @@ mod tests {
     #[test]
     fn project_status_validation_accepts_valid() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let p = db.update_project(None, Some("proj"), ProjectUpdates {
             status: Some("paused".into()),
             ..Default::default()
@@ -1850,7 +1934,7 @@ mod tests {
     #[test]
     fn self_edge_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Solo");
         let err = db.create_edge(t.id, t.id, "relates_to", None).unwrap_err();
         assert!(err.to_string().contains("self-edges not allowed"));
@@ -1871,7 +1955,7 @@ mod tests {
     #[test]
     fn in_progress_renamed_to_hyphen() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
         advance_to(&db, &id, &["ready-for-agent", "in-progress"]);
@@ -1882,7 +1966,7 @@ mod tests {
     #[test]
     fn pagination_limits_results() {
         let db = test_db();
-        db.create_project("proj", "Project", "").unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
         for i in 0..5 {
             create_test_task(&db, "proj", &format!("Task {i}"));
         }
@@ -1906,13 +1990,134 @@ mod tests {
     fn pagination_projects() {
         let db = test_db();
         for i in 0..5 {
-            db.create_project(&format!("p{i}"), &format!("Project {i}"), "").unwrap();
+            db.create_project(&format!("p{i}"), &format!("Project {i}"), "", None).unwrap();
         }
 
-        let page = db.list_projects(None, Some(3), None).unwrap();
+        let page = db.list_projects(None, None, Some(3), None).unwrap();
         assert_eq!(page.len(), 3);
 
-        let page2 = db.list_projects(None, Some(3), Some(3)).unwrap();
+        let page2 = db.list_projects(None, None, Some(3), Some(3)).unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn create_project_with_parent() {
+        let db = test_db();
+        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let child = db.create_project("chitta/research", "Chitta Research", "", Some(parent.id)).unwrap();
+        assert_eq!(child.parent_id, Some(parent.id));
+        assert_eq!(child.slug, "chitta/research");
+    }
+
+    #[test]
+    fn list_projects_roots_only() {
+        let db = test_db();
+        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id)).unwrap();
+        db.create_project("yojana", "Yojana", "", None).unwrap();
+
+        let roots = db.list_projects(None, Some(None), None, None).unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.iter().all(|p| p.parent_id.is_none()));
+    }
+
+    #[test]
+    fn list_projects_children_of_parent() {
+        let db = test_db();
+        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
+        db.create_project("chitta/core", "Core", "", Some(parent.id)).unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id)).unwrap();
+        db.create_project("yojana", "Yojana", "", None).unwrap();
+
+        let children = db.list_projects(None, Some(Some(&parent.id)), None, None).unwrap();
+        assert_eq!(children.len(), 2);
+        let slugs: Vec<&str> = children.iter().map(|p| p.slug.as_str()).collect();
+        assert!(slugs.contains(&"chitta/core"));
+        assert!(slugs.contains(&"chitta/research"));
+    }
+
+    #[test]
+    fn descendant_project_ids() {
+        let db = test_db();
+        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
+        db.create_project("chitta/research/embed", "Embed Research", "", Some(child.id)).unwrap();
+        db.create_project("chitta/core", "Core", "", Some(root.id)).unwrap();
+
+        let descendants = db.list_descendant_project_ids(&root.id).unwrap();
+        assert_eq!(descendants.len(), 3);
+
+        let all = db.project_ids_with_descendants(&root.id).unwrap();
+        assert_eq!(all.len(), 4); // root + 3 descendants
+    }
+
+    #[test]
+    fn task_query_rolls_up_descendants() {
+        let db = test_db();
+        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
+
+        create_test_task(&db, "chitta", "Root task");
+        // Create task in child project
+        db.create_task(CreateTaskParams {
+            project_id: child.id,
+            project_slug: "chitta/research".into(),
+            title: "Child task".into(),
+            description: String::new(),
+            category: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        }).unwrap();
+
+        let all_ids = db.project_ids_with_descendants(&root.id).unwrap();
+        let tasks = db.list_tasks(&TaskQueryFilter {
+            project_ids: Some(all_ids),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        // Query just the child
+        let child_tasks = db.list_tasks(&TaskQueryFilter {
+            project_ids: Some(vec![child.id]),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(child_tasks.len(), 1);
+        assert_eq!(child_tasks[0].title, "Child task");
+    }
+
+    #[test]
+    fn parse_task_id_with_nested_slug() {
+        let db = test_db();
+        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
+        db.create_task(CreateTaskParams {
+            project_id: child.id,
+            project_slug: "chitta/research".into(),
+            title: "Nested task".into(),
+            description: String::new(),
+            category: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        }).unwrap();
+
+        let task = db.get_task("chitta/research/1").unwrap().unwrap();
+        assert_eq!(task.title, "Nested task");
+        assert_eq!(task.project_slug, "chitta/research");
     }
 }

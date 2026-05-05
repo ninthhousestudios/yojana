@@ -16,6 +16,9 @@ pub enum YojanaError {
 
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl YojanaError {
@@ -24,7 +27,7 @@ impl YojanaError {
             Self::NotFound(_) => -32001,
             Self::Conflict(_) => -32002,
             Self::InvalidInput(_) => -32003,
-            Self::Db(_) | Self::Json(_) => -32000,
+            Self::Db(_) | Self::Json(_) | Self::Internal(_) => -32000,
         }
     }
 

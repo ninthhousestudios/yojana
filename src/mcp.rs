@@ -46,7 +46,7 @@ impl Clone for YojanaServer {
 #[tool_router(router = tool_router)]
 impl YojanaServer {
     #[tool(
-        description = "Create, get, list, or update projects. Actions: create (requires slug, title), get (requires id or slug), list (optional status filter), update (requires id or slug, plus fields to change)."
+        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — includes children), list (optional status filter, optional parent to list children; defaults to root projects only), update (requires id or slug, plus fields to change)."
     )]
     pub async fn yojana_project(
         &self,
@@ -79,7 +79,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Query tasks with filters. Optional: project (id or slug), status, category, slice_type, tag. Omit project for cross-project query. Each result includes ready/blocked flags computed from the dependency graph."
+        description = "Query tasks with filters. Optional: project (id or slug — includes tasks from all descendant sub-projects), status, category, slice_type, tag. Omit project for cross-project query. Each result includes ready/blocked flags computed from the dependency graph."
     )]
     pub async fn yojana_query(
         &self,

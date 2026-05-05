@@ -80,11 +80,16 @@ async fn main() -> anyhow::Result<()> {
                     let project = db
                         .get_project(None, Some(&s))?
                         .ok_or_else(|| anyhow::anyhow!("project '{}' not found", s))?;
+                    let children = db.list_projects(None, Some(Some(&project.id)), None, None)?;
                     println!("{}", display::format_project_detail(&project));
+                    if !children.is_empty() {
+                        println!("\nWorkstreams:");
+                        println!("{}", display::format_projects_list(&children));
+                    }
                 }
                 None => {
                     let status = if all { None } else { Some("active") };
-                    let projects = db.list_projects(status, None, None)?;
+                    let projects = db.list_projects(status, Some(None), None, None)?;
                     println!("{}", display::format_projects_list(&projects));
                 }
             }
@@ -97,7 +102,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
-            if identifier.contains('/') {
+            let is_task_id = identifier
+                .rsplit_once('/')
+                .map(|(_, last)| last.parse::<i64>().is_ok())
+                .unwrap_or(false);
+            if is_task_id {
                 let task = db
                     .get_task(&identifier)?
                     .ok_or_else(|| anyhow::anyhow!("task '{}' not found", identifier))?;
@@ -107,8 +116,9 @@ async fn main() -> anyhow::Result<()> {
             let project = db
                 .get_project(None, Some(&identifier))?
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", identifier))?;
+            let project_ids = db.project_ids_with_descendants(&project.id)?;
             let filter = TaskQueryFilter {
-                project_id: Some(project.id),
+                project_ids: Some(project_ids),
                 status,
                 category,
                 ..Default::default()

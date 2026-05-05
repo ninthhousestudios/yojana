@@ -27,7 +27,7 @@ fn make_task(db: &Db, project_id: uuid::Uuid, title: &str, desc: &str, commits: 
 #[test]
 fn bootstrap_v0_review() {
     let db = Db::open_in_memory().unwrap();
-    let project = db.create_project("yojana", "Yojana task graph server", "Local-first task graph for the manas ecosystem").unwrap();
+    let project = db.create_project("yojana", "Yojana task graph server", "Local-first task graph for the manas ecosystem", None).unwrap();
     let pid = project.id;
 
     // Slices 01-02: project + task CRUD

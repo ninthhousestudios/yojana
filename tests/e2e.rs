@@ -8,7 +8,7 @@ fn full_flow_v0() {
     let db = Db::open_in_memory().unwrap();
 
     // 2. Create project
-    let project = db.create_project("yojana", "Yojana task graph server", "").unwrap();
+    let project = db.create_project("yojana", "Yojana task graph server", "", None).unwrap();
     assert_eq!(project.slug, "yojana");
 
     // 3. Create three tasks: A (no deps), B (depends_on A), C (depends_on B)
