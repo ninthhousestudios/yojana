@@ -23,6 +23,12 @@ pub struct QueryArgs {
     /// Filter by tag (tasks containing this tag)
     #[serde(default)]
     pub tag: Option<String>,
+    /// Max results to return (default 100)
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// Offset for pagination
+    #[serde(default)]
+    pub offset: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +97,8 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         category: args.category,
         slice_type: args.slice_type,
         tag: args.tag,
+        limit: args.limit,
+        offset: args.offset,
     };
 
     let tasks = db.list_tasks(&filter)?;

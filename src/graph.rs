@@ -136,7 +136,7 @@ mod tests {
     fn not_ready_some_deps_pending() {
         let deps = vec![
             (id(1), id(2), "done".into()),
-            (id(1), id(3), "in_progress".into()),
+            (id(1), id(3), "in-progress".into()),
         ];
         assert!(!is_ready(id(1), &deps));
     }
@@ -145,7 +145,7 @@ mod tests {
     fn blocked_by_returns_incomplete() {
         let deps = vec![
             (id(1), id(2), "done".into()),
-            (id(1), id(3), "in_progress".into()),
+            (id(1), id(3), "in-progress".into()),
             (id(1), id(4), "needs-triage".into()),
         ];
         let blockers = blocked_by(id(1), &deps);
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn ready_ignores_other_tasks_deps() {
         let deps = vec![
-            (id(2), id(3), "in_progress".into()),
+            (id(2), id(3), "in-progress".into()),
         ];
         assert!(is_ready(id(1), &deps));
     }

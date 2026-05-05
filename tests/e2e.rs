@@ -88,7 +88,7 @@ fn full_flow_v0() {
     // 5. Transition A through the pipeline
     let id_a = task_a.id.to_string();
     db.update_task(&id_a, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-    db.update_task(&id_a, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap();
+    db.update_task(&id_a, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
     db.update_task(&id_a, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
 
     // 6. Now B should be ready (A is done), C still blocked

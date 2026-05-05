@@ -89,7 +89,7 @@ fn bootstrap_v0_review() {
     for task in [&s01, &s03, &s05, &s06, &s07, &s08] {
         let id = task.id.to_string();
         db.update_task(&id, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap();
+        db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
         db.update_task(&id, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
     }
 

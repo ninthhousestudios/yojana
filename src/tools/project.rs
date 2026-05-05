@@ -104,7 +104,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
             if let Some(ref status) = args.status {
                 validate_status(status)?;
             }
-            let rows = db.list_projects(args.status.as_deref())?;
+            let rows = db.list_projects(args.status.as_deref(), None, None)?;
             let out: Vec<ProjectOutput> = rows.into_iter().map(ProjectOutput::from).collect();
             Ok(serde_json::to_value(out)?)
         }

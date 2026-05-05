@@ -107,6 +107,8 @@ enum TaskIdentifier {
     SlugSeq(String, i64),
 }
 
+pub const DEFAULT_PAGE_LIMIT: i64 = 100;
+
 #[derive(Debug, Default)]
 pub struct TaskQueryFilter {
     pub project_id: Option<Uuid>,
@@ -114,6 +116,8 @@ pub struct TaskQueryFilter {
     pub category: Option<String>,
     pub slice_type: Option<String>,
     pub tag: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 // --- Project statuses ---
@@ -314,11 +318,39 @@ impl Db {
     }
 
     fn run_migrations(&self) -> Result<(), rusqlite::Error> {
+        const MIGRATIONS: &[(&str, &str)] = &[
+            ("0001_initial", include_str!("../migrations/0001_initial.sql")),
+            ("0002_tasks", include_str!("../migrations/0002_tasks.sql")),
+            ("0003_edges", include_str!("../migrations/0003_edges.sql")),
+            ("0004_conversations", include_str!("../migrations/0004_conversations.sql")),
+            ("0005_in_progress_rename", include_str!("../migrations/0005_in-progress-rename.sql")),
+        ];
+
         let conn = self.conn.lock();
-        conn.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
-        conn.execute_batch(include_str!("../migrations/0002_tasks.sql"))?;
-        conn.execute_batch(include_str!("../migrations/0003_edges.sql"))?;
-        conn.execute_batch(include_str!("../migrations/0004_conversations.sql"))
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _yojana_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            )",
+        )?;
+
+        for (name, sql) in MIGRATIONS {
+            let already_applied: bool = conn
+                .prepare("SELECT 1 FROM _yojana_migrations WHERE name = ?1")?
+                .query_row(rusqlite::params![name], |_| Ok(true))
+                .optional()?
+                .unwrap_or(false);
+
+            if !already_applied {
+                conn.execute_batch(sql)?;
+                conn.execute(
+                    "INSERT INTO _yojana_migrations (name, applied_at) VALUES (?1, ?2)",
+                    rusqlite::params![name, chrono::Utc::now().timestamp_millis()],
+                )?;
+                tracing::info!("applied migration: {name}");
+            }
+        }
+        Ok(())
     }
 
     // --- Project methods ---
@@ -374,16 +406,25 @@ impl Db {
         Err(YojanaError::InvalidInput("id or slug required".into()))
     }
 
-    pub fn list_projects(&self, status: Option<&str>) -> Result<Vec<ProjectRow>, YojanaError> {
+    pub fn list_projects(
+        &self,
+        status: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Vec<ProjectRow>, YojanaError> {
         let conn = self.conn.lock();
+        let lim = limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        let off = offset.unwrap_or(0);
         let rows = if let Some(status) = status {
-            let mut stmt =
-                conn.prepare("SELECT * FROM projects WHERE status = ?1 ORDER BY created_at")?;
-            stmt.query_map(rusqlite::params![status], map_project_row)?
+            let mut stmt = conn.prepare(
+                "SELECT * FROM projects WHERE status = ?1 ORDER BY created_at LIMIT ?2 OFFSET ?3",
+            )?;
+            stmt.query_map(rusqlite::params![status, lim, off], map_project_row)?
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            let mut stmt = conn.prepare("SELECT * FROM projects ORDER BY created_at")?;
-            stmt.query_map([], map_project_row)?
+            let mut stmt =
+                conn.prepare("SELECT * FROM projects ORDER BY created_at LIMIT ?1 OFFSET ?2")?;
+            stmt.query_map(rusqlite::params![lim, off], map_project_row)?
                 .collect::<Result<Vec<_>, _>>()?
         };
         Ok(rows)
@@ -643,6 +684,15 @@ impl Db {
             sql.push_str(&conditions.join(" AND "));
         }
         sql.push_str(" ORDER BY t.updated_at DESC");
+
+        let limit = filter.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        params.push(Box::new(limit));
+        sql.push_str(&format!(" LIMIT ?{}", params.len()));
+
+        if let Some(offset) = filter.offset {
+            params.push(Box::new(offset));
+            sql.push_str(&format!(" OFFSET ?{}", params.len()));
+        }
 
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -920,13 +970,13 @@ mod tests {
         db.create_project("a", "A", "").unwrap();
         db.create_project("b", "B", "").unwrap();
 
-        let all = db.list_projects(None).unwrap();
+        let all = db.list_projects(None, None, None).unwrap();
         assert_eq!(all.len(), 2);
 
-        let active = db.list_projects(Some("active")).unwrap();
+        let active = db.list_projects(Some("active"), None, None).unwrap();
         assert_eq!(active.len(), 2);
 
-        let paused = db.list_projects(Some("paused")).unwrap();
+        let paused = db.list_projects(Some("paused"), None, None).unwrap();
         assert_eq!(paused.len(), 0);
     }
 
@@ -1261,10 +1311,10 @@ mod tests {
         let id = t.id.to_string();
 
         db.update_task(&id, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap();
+        db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
         db.update_task(&id, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
 
-        let err = db.update_task(&id, TaskUpdates { status: Some("in_progress".into()), ..Default::default() }).unwrap_err();
+        let err = db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap_err();
         assert!(err.to_string().contains("invalid transition"));
 
         let reopened = db.update_task(&id, TaskUpdates { status: Some("needs-triage".into()), ..Default::default() }).unwrap();
@@ -1569,7 +1619,7 @@ mod tests {
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
 
         advance_to(&db, &id1, &["ready-for-agent"]);
-        advance_to(&db, &id2, &["ready-for-agent", "in_progress", "done"]);
+        advance_to(&db, &id2, &["ready-for-agent", "in-progress", "done"]);
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(t1.id, &deps));
@@ -1601,12 +1651,12 @@ mod tests {
 
         let mid1_id = mid1.id.to_string();
         let mid2_id = mid2.id.to_string();
-        advance_to(&db, &mid1_id, &["ready-for-agent", "in_progress", "done"]);
+        advance_to(&db, &mid1_id, &["ready-for-agent", "in-progress", "done"]);
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(!crate::graph::is_ready(leaf.id, &deps));
 
-        advance_to(&db, &mid2_id, &["ready-for-agent", "in_progress", "done"]);
+        advance_to(&db, &mid2_id, &["ready-for-agent", "in-progress", "done"]);
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(leaf.id, &deps));
@@ -1804,5 +1854,65 @@ mod tests {
         let t = create_test_task(&db, "proj", "Solo");
         let err = db.create_edge(t.id, t.id, "relates_to", None).unwrap_err();
         assert!(err.to_string().contains("self-edges not allowed"));
+    }
+
+    #[test]
+    fn migration_table_populated() {
+        let db = test_db();
+        let conn = db.conn.lock();
+        let count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM _yojana_migrations")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert!(count >= 5, "expected at least 5 migrations applied, got {count}");
+    }
+
+    #[test]
+    fn in_progress_renamed_to_hyphen() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        let t = create_test_task(&db, "proj", "Task");
+        let id = t.id.to_string();
+        advance_to(&db, &id, &["ready-for-agent", "in-progress"]);
+        let fetched = db.get_task(&id).unwrap().unwrap();
+        assert_eq!(fetched.status, "in-progress");
+    }
+
+    #[test]
+    fn pagination_limits_results() {
+        let db = test_db();
+        db.create_project("proj", "Project", "").unwrap();
+        for i in 0..5 {
+            create_test_task(&db, "proj", &format!("Task {i}"));
+        }
+
+        let page = db.list_tasks(&TaskQueryFilter {
+            limit: Some(2),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(page.len(), 2);
+
+        let page2 = db.list_tasks(&TaskQueryFilter {
+            limit: Some(2),
+            offset: Some(2),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_ne!(page[0].id, page2[0].id);
+    }
+
+    #[test]
+    fn pagination_projects() {
+        let db = test_db();
+        for i in 0..5 {
+            db.create_project(&format!("p{i}"), &format!("Project {i}"), "").unwrap();
+        }
+
+        let page = db.list_projects(None, Some(3), None).unwrap();
+        assert_eq!(page.len(), 3);
+
+        let page2 = db.list_projects(None, Some(3), Some(3)).unwrap();
+        assert_eq!(page2.len(), 2);
     }
 }

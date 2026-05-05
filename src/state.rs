@@ -5,7 +5,7 @@ const VALID_STATUSES: &[&str] = &[
     "needs-info",
     "ready-for-agent",
     "ready-for-human",
-    "in_progress",
+    "in-progress",
     "done",
     "wontfix",
 ];
@@ -33,9 +33,9 @@ pub fn validate_transition(from: &str, to: &str) -> Result<(), YojanaError> {
     let allowed: &[&str] = match from {
         "needs-triage" => &["needs-info", "ready-for-agent", "ready-for-human", "wontfix"],
         "needs-info" => &["needs-triage", "ready-for-agent", "ready-for-human", "wontfix"],
-        "ready-for-agent" => &["in_progress", "needs-triage", "ready-for-human"],
-        "ready-for-human" => &["in_progress", "needs-triage", "ready-for-agent"],
-        "in_progress" => &["done", "needs-triage", "wontfix"],
+        "ready-for-agent" => &["in-progress", "needs-triage", "ready-for-human"],
+        "ready-for-human" => &["in-progress", "needs-triage", "ready-for-agent"],
+        "in-progress" => &["done", "needs-triage", "wontfix"],
         "done" => &["needs-triage"],
         "wontfix" => &["needs-triage"],
         _ => &[],
@@ -70,15 +70,15 @@ mod tests {
             ("needs-info", "ready-for-agent"),
             ("needs-info", "ready-for-human"),
             ("needs-info", "wontfix"),
-            ("ready-for-agent", "in_progress"),
+            ("ready-for-agent", "in-progress"),
             ("ready-for-agent", "needs-triage"),
             ("ready-for-agent", "ready-for-human"),
-            ("ready-for-human", "in_progress"),
+            ("ready-for-human", "in-progress"),
             ("ready-for-human", "needs-triage"),
             ("ready-for-human", "ready-for-agent"),
-            ("in_progress", "done"),
-            ("in_progress", "needs-triage"),
-            ("in_progress", "wontfix"),
+            ("in-progress", "done"),
+            ("in-progress", "needs-triage"),
+            ("in-progress", "wontfix"),
             ("done", "needs-triage"),
             ("wontfix", "needs-triage"),
         ];
@@ -93,12 +93,12 @@ mod tests {
     #[test]
     fn invalid_transitions_rejected() {
         let cases = [
-            ("done", "in_progress"),
+            ("done", "in-progress"),
             ("done", "ready-for-agent"),
             ("wontfix", "done"),
-            ("in_progress", "ready-for-agent"),
+            ("in-progress", "ready-for-agent"),
             ("ready-for-agent", "done"),
-            ("needs-triage", "in_progress"),
+            ("needs-triage", "in-progress"),
             ("needs-triage", "done"),
         ];
         for (from, to) in cases {
