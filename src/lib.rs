@@ -1,6 +1,7 @@
 pub mod config;
 pub mod context;
 pub mod db;
+pub mod display;
 pub mod error;
 pub mod graph;
 pub mod mcp;

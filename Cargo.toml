@@ -8,6 +8,7 @@ anyhow = "1"
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
 dotenvy = "0.15"
 parking_lot = "0.12"
 rmcp = { version = "1", features = ["server", "transport-io", "transport-streamable-http-server", "macros", "schemars"] }

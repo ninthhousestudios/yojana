@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Local markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Yojana MCP. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
