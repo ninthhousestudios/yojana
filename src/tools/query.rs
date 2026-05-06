@@ -29,6 +29,14 @@ pub struct QueryArgs {
     /// Offset for pagination
     #[serde(default)]
     pub offset: Option<i64>,
+    /// If true, include all done/wontfix tasks. Default behavior includes them
+    /// only if completed within `recent_terminal_window_ms` (default: last 24h).
+    #[serde(default)]
+    pub include_all_terminal: bool,
+    /// Window in millis for "recent" done/wontfix tasks. Defaults to 24h.
+    /// Ignored if `include_all_terminal` is true or `status` is set.
+    #[serde(default)]
+    pub recent_terminal_window_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +99,13 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         .map(|p| resolve_project_ids(db, p))
         .transpose()?;
 
+    let cutoff = if args.include_all_terminal || args.status.is_some() {
+        None
+    } else {
+        let window = args.recent_terminal_window_ms.unwrap_or(24 * 60 * 60 * 1000);
+        Some(chrono::Utc::now().timestamp_millis() - window)
+    };
+
     let filter = TaskQueryFilter {
         project_ids,
         status: args.status,
@@ -99,6 +114,7 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         tag: args.tag,
         limit: args.limit,
         offset: args.offset,
+        include_terminal_after: cutoff,
     };
 
     let tasks = db.list_tasks(&filter)?;

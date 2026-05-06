@@ -76,6 +76,10 @@ pub struct TaskArgs {
     /// Comment author (for action=comment, defaults to "user")
     #[serde(default)]
     pub author: Option<String>,
+    /// Commit SHA shorthand. Appends a {type:"git:commit", value:<sha>}
+    /// context_ref. Use with action=update (typically alongside status=done).
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,6 +106,7 @@ pub struct TaskOutput {
     pub history: Vec<HistoryEntry>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub completed_at: Option<i64>,
 }
 
 impl From<TaskRow> for TaskOutput {
@@ -130,6 +135,7 @@ impl From<TaskRow> for TaskOutput {
             history: serde_json::from_str(&row.history).unwrap_or_default(),
             created_at: row.created_at,
             updated_at: row.updated_at,
+            completed_at: row.completed_at,
         }
     }
 }
@@ -259,6 +265,24 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             if let Some(ref refs) = args.context_refs {
                 validate_context_refs(refs)?;
             }
+            // If a commit shorthand is provided, append it as a git:commit
+            // context_ref. Combines with any explicit context_refs the caller
+            // also passed (those take precedence as the base list).
+            let merged_context_refs = if let Some(ref sha) = args.commit {
+                let mut refs = match args.context_refs {
+                    Some(ref existing) => existing.clone(),
+                    None => {
+                        let task = db
+                            .get_task(id)?
+                            .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
+                        serde_json::from_str(&task.context_refs).unwrap_or_default()
+                    }
+                };
+                refs.push(serde_json::json!({"type": "git:commit", "value": sha}));
+                Some(refs)
+            } else {
+                args.context_refs
+            };
             let updates = TaskUpdates {
                 title: args.title,
                 description: args.description,
@@ -274,7 +298,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 execution_record: args.execution_record,
                 reproduction: args.reproduction,
                 root_cause: args.root_cause,
-                context_refs: args.context_refs.map(|v| to_json(&v)).transpose()?,
+                context_refs: merged_context_refs.map(|v| to_json(&v)).transpose()?,
                 files: args.files.map(|v| to_json(&v)).transpose()?,
                 tags: args.tags.map(|v| to_json(&v)).transpose()?,
             };

@@ -205,6 +205,7 @@ mod tests {
             history: r#"[{"ts":1000,"kind":"task_created","payload":{}},{"ts":2000,"kind":"status_changed","payload":{"from":"needs-triage","to":"ready-for-agent"}}]"#.into(),
             created_at: 1000,
             updated_at: 2000,
+            completed_at: None,
         }
     }
 

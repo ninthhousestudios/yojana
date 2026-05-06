@@ -1,33 +1,33 @@
-# Handoff
+# Handoff — 2026-05-06
 
-## What's done
+## State of the tree
 
-- All 8 v0 slices complete, 75 tests passing
-- 6 MCP tools: yojana_project, yojana_task, yojana_edge, yojana_query, yojana_ready, yojana_context
-- 3 context shapes: summary, working, review
-- mp-skills adapter docs in place
-- **All 17 review findings resolved** (waves 1-3)
-- Systemd user service running, MCP config in `~/.claude/settings.json`
+Working tree has uncommitted changes from this session — completed_at + CLI default-hide + `yojana done` + README. Build clean, 86 tests pass, 0.2.1 installed and the systemd service is running on it. Josh has not requested a commit yet; offer one when picking this back up.
 
-## Review fixes summary
+Modified/new files:
+- `migrations/0007_completed_at.sql` (new)
+- `src/db.rs` — TaskRow.completed_at, TASK_SELECT, update_task transitions, TaskQueryFilter::include_terminal_after, TERMINAL_STATUSES
+- `src/main.rs` — `Tasks --all`, partition into Active / Recently done, new `Done` subcommand
+- `src/display.rs` — Completed column when any row has completed_at
+- `src/tools/task.rs` — TaskOutput.completed_at, TaskArgs.commit shorthand
+- `src/tools/query.rs` — include_all_terminal, recent_terminal_window_ms
+- `src/context.rs` — test fixture only
+- `Cargo.toml` — 0.2.1
+- `README.md` (new)
 
-Waves 1+2: tag filter json_each, clear-to-NULL pattern, project status validation, neighbor-loading helper, cancel token, SIGTERM, JSON parse warnings, self-edge prevention, state transitions, env var warning, TOCTOU fix.
+## What to pick up
 
-Wave 3: migration versioning (`_yojana_migrations` table), pagination (limit/offset on list_tasks and list_projects, default 100), `in_progress` renamed to `in-progress` with data migration.
+- **Commit the session's changes.** No commit was made; everything is in the working tree. Suggested message: `feat: completed_at tracking, CLI default-hide done>24h, yojana done with --commit`.
+- **Optional follow-ups Josh raised but didn't ask for:**
+  - Post-commit git hook that auto-links `yojana:<slug>` mentions in commit messages → adds `git:commit` ref to the task. Plan only — implement if Josh wants the ergonomics.
+  - `snoozed_until` field for dated deferral. Only implement if a concrete "wait until date X" use case shows up.
 
-Deferred (not needed yet): scoped cycle check (#13), scoped ready detection (#14), sequence number under pooling (#16).
+## Context the next session needs
 
-## Pick up next
+- Decisions are in chitta — search `tags:decision yojana 2026-05-06` for: rejection of `cancelled`/`deferred` statuses; rationale for `completed_at` column + `git:commit` context_ref over a dedicated `task_commits` table.
+- The 24h default-hide is wired via `TaskQueryFilter::include_terminal_after`. Both the CLI Tasks command and the MCP `yojana_query` tool default to a 24h window; passing `--status` (CLI) or a `status` filter (MCP) disables it; `--all` / `include_all_terminal: true` disables it explicitly.
+- The MCP `yojana_task` action=update now accepts a top-level `commit: <sha>` field. It merges into context_refs (preserving any explicit context_refs the caller also passed, plus existing refs on the task if no list was passed).
 
-- **First real use**: register tasks in yojana itself (dog-fooding)
-- **MCP config**: add yojana to other manas project `.claude/settings.json` files
+## Blockers
 
-## Context needed
-
-- Commit message workaround: panda breaks heredoc syntax. Use `printf ... > /tmp/file && git commit -F /tmp/file`
-- `sutra_impact` must be called before editing load-bearing files
-- Db uses parking_lot::Mutex — public methods must not call other public methods (deadlock)
-- Context assembler is pure — tool handler fetches data, assembler shapes it
-- TaskUpdates nullable fields use `Option<Option<String>>`: None=keep, Some(None)=clear, Some(Some(v))=set
-- Status is now `in-progress` (hyphenated), not `in_progress`
-- Migrations are versioned — add new ones as `0006_*.sql` and register in the MIGRATIONS const
+None.

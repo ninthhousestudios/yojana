@@ -65,6 +65,7 @@ pub struct TaskRow {
     pub history: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub completed_at: Option<i64>,
 }
 
 pub struct CreateTaskParams {
@@ -119,7 +120,14 @@ pub struct TaskQueryFilter {
     pub tag: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// When set, terminal-status tasks ('done', 'wontfix') are only included
+    /// if their completed_at >= this timestamp (millis). Non-terminal tasks
+    /// are unaffected.
+    pub include_terminal_after: Option<i64>,
 }
+
+/// Statuses that count as "terminal" for default-hide filtering.
+pub const TERMINAL_STATUSES: &[&str] = &["done", "wontfix"];
 
 // --- Project statuses ---
 
@@ -209,7 +217,8 @@ const TASK_SELECT: &str = "\
     t.title, t.description, t.category, t.status, t.slice_type, \
     t.acceptance_criteria, t.decisions, t.implementation_plan, \
     t.execution_record, t.reproduction, t.root_cause, \
-    t.context_refs, t.files, t.tags, t.history, t.created_at, t.updated_at \
+    t.context_refs, t.files, t.tags, t.history, t.created_at, t.updated_at, \
+    t.completed_at \
     FROM tasks t JOIN projects p ON t.project_id = p.id";
 
 fn uuid_from_blob(row: &rusqlite::Row<'_>, col: &str) -> rusqlite::Result<Uuid> {
@@ -242,6 +251,7 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         history: row.get("history")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+        completed_at: row.get("completed_at")?,
     })
 }
 
@@ -335,6 +345,7 @@ impl Db {
             ("0004_conversations", include_str!("../migrations/0004_conversations.sql")),
             ("0005_in_progress_rename", include_str!("../migrations/0005_in-progress-rename.sql")),
             ("0006_parent_projects", include_str!("../migrations/0006_parent-projects.sql")),
+            ("0007_completed_at", include_str!("../migrations/0007_completed_at.sql")),
         ];
 
         let conn = self.conn.lock();
@@ -631,6 +642,7 @@ impl Db {
         let now = chrono::Utc::now().timestamp_millis();
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&task.history)?;
 
+        let mut new_completed_at = task.completed_at;
         if let Some(ref new_status) = updates.status {
             if new_status != &task.status {
                 state::validate_transition(&task.status, new_status)?;
@@ -639,6 +651,11 @@ impl Db {
                     kind: "status_changed".into(),
                     payload: serde_json::json!({"from": task.status, "to": new_status}),
                 });
+                if new_status == "done" {
+                    new_completed_at = Some(now);
+                } else if task.status == "done" {
+                    new_completed_at = None;
+                }
             }
         }
         if let Some(ref new_title) = updates.title {
@@ -693,8 +710,9 @@ impl Db {
                 title=?1, description=?2, category=?3, status=?4, slice_type=?5, \
                 acceptance_criteria=?6, decisions=?7, implementation_plan=?8, \
                 execution_record=?9, reproduction=?10, root_cause=?11, \
-                context_refs=?12, files=?13, tags=?14, history=?15, updated_at=?16 \
-            WHERE id=?17",
+                context_refs=?12, files=?13, tags=?14, history=?15, updated_at=?16, \
+                completed_at=?17 \
+            WHERE id=?18",
             rusqlite::params![
                 new_title,
                 new_desc,
@@ -712,6 +730,7 @@ impl Db {
                 new_tags,
                 history_json,
                 now,
+                new_completed_at,
                 task.id.as_bytes().as_slice(),
             ],
         )?;
@@ -759,6 +778,18 @@ impl Db {
             params.push(Box::new(tag.clone()));
             conditions.push(format!(
                 "EXISTS (SELECT 1 FROM json_each(t.tags) WHERE json_each.value = ?{})",
+                params.len()
+            ));
+        }
+        if let Some(cutoff) = filter.include_terminal_after {
+            let terminal_list = TERMINAL_STATUSES
+                .iter()
+                .map(|s| format!("'{s}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            params.push(Box::new(cutoff));
+            conditions.push(format!(
+                "(t.status NOT IN ({terminal_list}) OR t.completed_at >= ?{})",
                 params.len()
             ));
         }

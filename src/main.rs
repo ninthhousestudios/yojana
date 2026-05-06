@@ -12,9 +12,11 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{Db, TaskQueryFilter};
+use yojana::db::{Db, TaskQueryFilter, TaskUpdates, TERMINAL_STATUSES};
 use yojana::display;
 use yojana::mcp::YojanaServer;
+
+const DONE_RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Parser)]
 #[command(name = "yojana", version)]
@@ -49,6 +51,17 @@ enum Command {
         /// Filter by category
         #[arg(long)]
         category: Option<String>,
+        /// Include all done/wontfix tasks (default: only those completed in last 24h)
+        #[arg(long)]
+        all: bool,
+    },
+    /// Mark a task done, optionally recording the commit it shipped in.
+    Done {
+        /// Task identifier (UUID or slug/N)
+        id: String,
+        /// Commit SHA to record as a context_ref on the task
+        #[arg(long)]
+        commit: Option<String>,
     },
 }
 
@@ -99,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
             identifier,
             status,
             category,
+            all,
         } => {
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
@@ -117,14 +131,76 @@ async fn main() -> anyhow::Result<()> {
                 .get_project(None, Some(&identifier))?
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", identifier))?;
             let project_ids = db.project_ids_with_descendants(&project.id)?;
+            // If user asked for a specific status, honor it and skip default-hide.
+            let cutoff = if all || status.is_some() {
+                None
+            } else {
+                Some(chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS)
+            };
             let filter = TaskQueryFilter {
                 project_ids: Some(project_ids),
                 status,
                 category,
+                include_terminal_after: cutoff,
                 ..Default::default()
             };
             let tasks = db.list_tasks(&filter)?;
-            println!("{}", display::format_tasks_list(&tasks));
+            let (active, recent_terminal): (Vec<_>, Vec<_>) = tasks
+                .into_iter()
+                .partition(|t| !TERMINAL_STATUSES.contains(&t.status.as_str()));
+            if active.is_empty() && recent_terminal.is_empty() {
+                println!("No tasks found.");
+            } else {
+                if !active.is_empty() || recent_terminal.is_empty() {
+                    println!("Active");
+                    println!("{}", display::format_tasks_list(&active));
+                }
+                if !recent_terminal.is_empty() {
+                    if !active.is_empty() {
+                        println!();
+                    }
+                    let header = if all {
+                        "Done / wontfix"
+                    } else {
+                        "Recently done (last 24h)"
+                    };
+                    println!("{header}");
+                    println!("{}", display::format_tasks_list(&recent_terminal));
+                }
+            }
+            Ok(())
+        }
+        Command::Done { id, commit } => {
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let task = db
+                .get_task(&id)?
+                .ok_or_else(|| anyhow::anyhow!("task '{}' not found", id))?;
+
+            let mut context_refs: Vec<serde_json::Value> =
+                serde_json::from_str(&task.context_refs).unwrap_or_default();
+            let refs_changed = if let Some(ref sha) = commit {
+                context_refs.push(serde_json::json!({"type": "git:commit", "value": sha}));
+                true
+            } else {
+                false
+            };
+
+            let updates = TaskUpdates {
+                status: Some("done".to_string()),
+                context_refs: if refs_changed {
+                    Some(serde_json::to_string(&context_refs)?)
+                } else {
+                    None
+                },
+                ..Default::default()
+            };
+            let updated = db.update_task(&id, updates)?;
+            let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
+            match commit {
+                Some(sha) => println!("{} → done (commit {})", human_id, sha),
+                None => println!("{} → done", human_id),
+            }
             Ok(())
         }
     }

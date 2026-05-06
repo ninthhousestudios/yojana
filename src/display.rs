@@ -28,18 +28,31 @@ pub fn format_tasks_list(tasks: &[TaskRow]) -> String {
     if tasks.is_empty() {
         return "No tasks found.".to_string();
     }
+    let show_completed = tasks.iter().any(|t| t.completed_at.is_some());
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_header(vec!["ID", "Title", "Status", "Category"]);
+    let mut header = vec!["ID", "Title", "Status", "Category"];
+    if show_completed {
+        header.push("Completed");
+    }
+    table.set_header(header);
     for t in tasks {
         let human_id = format!("{}/{}", t.project_slug, t.sequence_number);
         let category = t.category.as_deref().unwrap_or("-");
-        table.add_row(vec![
-            human_id.as_str(),
-            t.title.as_str(),
-            t.status.as_str(),
-            category,
-        ]);
+        let mut row = vec![
+            human_id.clone(),
+            t.title.clone(),
+            t.status.clone(),
+            category.to_string(),
+        ];
+        if show_completed {
+            row.push(
+                t.completed_at
+                    .map(format_ts)
+                    .unwrap_or_else(|| "-".to_string()),
+            );
+        }
+        table.add_row(row);
     }
     table.to_string()
 }
@@ -164,6 +177,7 @@ mod tests {
             history: "[]".to_string(),
             created_at: 1700000000000,
             updated_at: 1700000060000,
+            completed_at: None,
         }
     }
 
