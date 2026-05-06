@@ -12,8 +12,8 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{Db, TaskQueryFilter, TaskUpdates, TERMINAL_STATUSES};
-use yojana::display;
+use yojana::db::{CreateTaskParams, Db, TaskQueryFilter, TaskUpdates, TERMINAL_STATUSES};
+use yojana::display::{self, EdgeDirection, EdgeDisplay};
 use yojana::mcp::YojanaServer;
 
 const DONE_RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -62,6 +62,16 @@ enum Command {
         /// Commit SHA to record as a context_ref on the task
         #[arg(long)]
         commit: Option<String>,
+    },
+    /// Quickly capture a task in a project (status: needs-triage)
+    Todo {
+        /// Project slug (supports nested form, e.g. `chitta/research`)
+        project: String,
+        /// Task title
+        title: String,
+        /// Task body. If omitted and stdin is piped, stdin is read as the body.
+        #[arg(short = 'm', long = "message")]
+        message: Option<String>,
     },
 }
 
@@ -124,7 +134,8 @@ async fn main() -> anyhow::Result<()> {
                 let task = db
                     .get_task(&identifier)?
                     .ok_or_else(|| anyhow::anyhow!("task '{}' not found", identifier))?;
-                println!("{}", display::format_task_detail(&task));
+                let edges = resolve_edges_for_display(&db, &task)?;
+                println!("{}", display::format_task_detail(&task, &edges));
                 return Ok(());
             }
             let project = db
@@ -168,6 +179,49 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", display::format_tasks_list(&recent_terminal));
                 }
             }
+            Ok(())
+        }
+        Command::Todo { project, title, message } => {
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let proj = db
+                .get_project(None, Some(&project))?
+                .ok_or_else(|| anyhow::anyhow!("project '{}' not found", project))?;
+
+            let description = match message {
+                Some(m) => m,
+                None => {
+                    use std::io::{IsTerminal, Read};
+                    let stdin = std::io::stdin();
+                    if !stdin.is_terminal() {
+                        let mut buf = String::new();
+                        stdin.lock().read_to_string(&mut buf)?;
+                        buf.trim_end_matches('\n').to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+            };
+
+            let params = CreateTaskParams {
+                project_id: proj.id,
+                project_slug: proj.slug.clone(),
+                title,
+                description,
+                category: None,
+                slice_type: None,
+                acceptance_criteria: "[]".to_string(),
+                decisions: "[]".to_string(),
+                context_refs: "[]".to_string(),
+                files: "[]".to_string(),
+                tags: "[]".to_string(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+            };
+            let row = db.create_task(params)?;
+            println!("{}/{}", row.project_slug, row.sequence_number);
             Ok(())
         }
         Command::Done { id, commit } => {
@@ -269,6 +323,32 @@ async fn serve_http() -> anyhow::Result<()> {
     cancel.cancel();
     let _ = std::fs::remove_file(&pid_path);
     Ok(())
+}
+
+fn resolve_edges_for_display(
+    db: &Db,
+    task: &yojana::db::TaskRow,
+) -> anyhow::Result<Vec<EdgeDisplay>> {
+    let edges = db.list_edges_for_task(&task.id)?;
+    let mut out = Vec::with_capacity(edges.len());
+    for e in edges {
+        let (other_id, direction) = if e.source_task_id == task.id {
+            (e.target_task_id, EdgeDirection::Outgoing)
+        } else {
+            (e.source_task_id, EdgeDirection::Incoming)
+        };
+        let other = match db.get_task(&other_id.to_string())? {
+            Some(t) => t,
+            None => continue,
+        };
+        out.push(EdgeDisplay {
+            direction,
+            edge_type: e.edge_type,
+            other_human_id: format!("{}/{}", other.project_slug, other.sequence_number),
+            other_title: other.title,
+        });
+    }
+    Ok(out)
 }
 
 async fn shutdown_signal() {

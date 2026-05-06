@@ -3,6 +3,37 @@ use comfy_table::{Table, presets::UTF8_FULL_CONDENSED};
 
 use crate::db::{ProjectRow, TaskRow};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeDirection {
+    Outgoing,
+    Incoming,
+}
+
+#[derive(Debug, Clone)]
+pub struct EdgeDisplay {
+    pub direction: EdgeDirection,
+    pub edge_type: String,
+    pub other_human_id: String,
+    pub other_title: String,
+}
+
+fn edge_label(edge_type: &str, direction: EdgeDirection) -> &'static str {
+    use EdgeDirection::*;
+    match (edge_type, direction) {
+        ("depends_on", Outgoing) => "Blocked by",
+        ("depends_on", Incoming) => "Blocks",
+        ("relates_to", _) => "Relates to",
+        ("supersedes", Outgoing) => "Supersedes",
+        ("supersedes", Incoming) => "Superseded by",
+        ("refines", Outgoing) => "Refines",
+        ("refines", Incoming) => "Refined by",
+        ("motivated_by", Outgoing) => "Motivated by",
+        ("motivated_by", Incoming) => "Motivates",
+        (_, Outgoing) => "Out",
+        (_, Incoming) => "In",
+    }
+}
+
 fn format_ts(millis: i64) -> String {
     chrono::Local
         .timestamp_millis_opt(millis)
@@ -71,7 +102,7 @@ pub fn format_project_detail(p: &ProjectRow) -> String {
     out
 }
 
-pub fn format_task_detail(t: &TaskRow) -> String {
+pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay]) -> String {
     let mut out = String::new();
     let human_id = format!("{}/{}", t.project_slug, t.sequence_number);
 
@@ -92,6 +123,33 @@ pub fn format_task_detail(t: &TaskRow) -> String {
 
     out.push_str(&format!("Created:  {}\n", format_ts(t.created_at)));
     out.push_str(&format!("Updated:  {}\n", format_ts(t.updated_at)));
+
+    if !edges.is_empty() {
+        out.push_str("\nRelationships:\n");
+        let mut grouped: Vec<(&'static str, Vec<&EdgeDisplay>)> = Vec::new();
+        for e in edges {
+            let label = edge_label(&e.edge_type, e.direction);
+            if let Some((_, v)) = grouped.iter_mut().find(|(l, _)| *l == label) {
+                v.push(e);
+            } else {
+                grouped.push((label, vec![e]));
+            }
+        }
+        let label_width = grouped.iter().map(|(l, _)| l.len()).max().unwrap_or(0);
+        for (label, items) in grouped {
+            for (i, e) in items.iter().enumerate() {
+                let prefix = if i == 0 {
+                    format!("  {:width$}  ", format!("{}:", label), width = label_width + 1)
+                } else {
+                    " ".repeat(label_width + 5)
+                };
+                out.push_str(&format!(
+                    "{}{} — {}\n",
+                    prefix, e.other_human_id, e.other_title
+                ));
+            }
+        }
+    }
 
     if !t.description.is_empty() {
         let desc = t.description.replace("\\n", "\n");
@@ -232,7 +290,7 @@ mod tests {
     #[test]
     fn task_detail_shows_fields_and_criteria() {
         let t = sample_task();
-        let out = format_task_detail(&t);
+        let out = format_task_detail(&t, &[]);
         assert!(out.contains("Task:     myproj/1"));
         assert!(out.contains("Title:    Do the thing"));
         assert!(out.contains("Status:   in-progress"));
@@ -250,8 +308,57 @@ mod tests {
         let mut t = sample_task();
         t.acceptance_criteria = "[]".to_string();
         t.decisions = "[]".to_string();
-        let out = format_task_detail(&t);
+        let out = format_task_detail(&t, &[]);
         assert!(!out.contains("Acceptance Criteria:"));
         assert!(!out.contains("Decisions:"));
+    }
+
+    #[test]
+    fn task_detail_omits_relationships_when_empty() {
+        let t = sample_task();
+        let out = format_task_detail(&t, &[]);
+        assert!(!out.contains("Relationships:"));
+    }
+
+    #[test]
+    fn task_detail_renders_edges_grouped_by_label() {
+        let t = sample_task();
+        let edges = vec![
+            EdgeDisplay {
+                direction: EdgeDirection::Outgoing,
+                edge_type: "depends_on".into(),
+                other_human_id: "myproj/2".into(),
+                other_title: "Upstream task".into(),
+            },
+            EdgeDisplay {
+                direction: EdgeDirection::Incoming,
+                edge_type: "depends_on".into(),
+                other_human_id: "myproj/3".into(),
+                other_title: "Downstream task".into(),
+            },
+            EdgeDisplay {
+                direction: EdgeDirection::Incoming,
+                edge_type: "depends_on".into(),
+                other_human_id: "myproj/4".into(),
+                other_title: "Other downstream".into(),
+            },
+            EdgeDisplay {
+                direction: EdgeDirection::Outgoing,
+                edge_type: "relates_to".into(),
+                other_human_id: "smriti/1".into(),
+                other_title: "Cross-project".into(),
+            },
+        ];
+        let out = format_task_detail(&t, &edges);
+        assert!(out.contains("Relationships:"));
+        assert!(out.contains("Blocked by:"));
+        assert!(out.contains("myproj/2 — Upstream task"));
+        assert!(out.contains("Blocks:"));
+        assert!(out.contains("myproj/3 — Downstream task"));
+        assert!(out.contains("myproj/4 — Other downstream"));
+        assert!(out.contains("Relates to:"));
+        assert!(out.contains("smriti/1 — Cross-project"));
+        // Single label heading per group: "Blocks:" appears once even with two items.
+        assert_eq!(out.matches("Blocks:").count(), 1);
     }
 }
