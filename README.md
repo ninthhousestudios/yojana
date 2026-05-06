@@ -62,6 +62,26 @@ Shorthand to mark a task done. With `--commit`, appends a `git:commit` context_r
 yojana done yojana/9 --commit $(git rev-parse HEAD)
 ```
 
+### `yojana tree <slug> [--all]`
+
+Show the dependency tree for a project. Renders `depends_on` edges as an ASCII tree in execution order — roots are tasks with no dependencies (start here), children are tasks unlocked when the parent completes.
+
+By default, entire trees where every task is terminal and completed >24h ago are hidden. `--all` shows the full history.
+
+```
+$ yojana tree chitta
+chitta/1  [done] Migration 0007: external_refs typed column
+└── chitta/4  [needs-triage] search_memories updates
+
+chitta/2  [done] Migration 0008: soft-delete + retirement
+└── chitta/4  (see above)
+
+Standalone (no dependency edges):
+  chitta/5  [needs-triage] chitta show CLI
+```
+
+Diamond nodes (depended on by multiple tasks) are shown once; subsequent appearances display `(see above)`.
+
 ## MCP
 
 All tools live under `mcp__yojana__*`. Highlights:
