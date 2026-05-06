@@ -1,7 +1,12 @@
 use chrono::TimeZone;
 use comfy_table::{Table, presets::UTF8_FULL_CONDENSED};
 
+use std::collections::HashMap;
+
+use uuid::Uuid;
+
 use crate::db::{ProjectRow, TaskRow};
+use crate::graph::ForestNode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeDirection {
@@ -193,10 +198,94 @@ pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay]) -> String {
     out
 }
 
+pub fn format_dependency_tree(
+    roots: &[ForestNode],
+    standalone: &[Uuid],
+    tasks: &HashMap<Uuid, &TaskRow>,
+) -> String {
+    if roots.is_empty() && standalone.is_empty() {
+        return "No tasks found.".to_string();
+    }
+    let mut out = String::new();
+    if roots.is_empty() && !standalone.is_empty() {
+        out.push_str("No dependency edges found.\n\n");
+    }
+    for root in roots {
+        render_node(&mut out, root, tasks, "", true, true);
+    }
+    if !standalone.is_empty() {
+        if !roots.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("Standalone (no dependency edges):\n");
+        for id in standalone {
+            if let Some(t) = tasks.get(id) {
+                out.push_str(&format!(
+                    "  {}/{}  [{}] {}\n",
+                    t.project_slug, t.sequence_number, t.status, t.title
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn render_node(
+    out: &mut String,
+    node: &ForestNode,
+    tasks: &HashMap<Uuid, &TaskRow>,
+    prefix: &str,
+    is_last: bool,
+    is_root: bool,
+) {
+    let connector = if is_root {
+        ""
+    } else if is_last {
+        "└── "
+    } else {
+        "├── "
+    };
+
+    if !is_root {
+        // no extra spacing for children
+    } else if !out.is_empty() {
+        out.push('\n');
+    }
+
+    match tasks.get(&node.task_id) {
+        Some(t) => {
+            if node.seen_before {
+                out.push_str(&format!(
+                    "{prefix}{connector}{}/{}  (see above)\n",
+                    t.project_slug, t.sequence_number
+                ));
+                return;
+            }
+            out.push_str(&format!(
+                "{prefix}{connector}{}/{}  [{}] {}\n",
+                t.project_slug, t.sequence_number, t.status, t.title
+            ));
+        }
+        None => return,
+    }
+
+    let child_prefix = if is_root {
+        String::new()
+    } else if is_last {
+        format!("{prefix}    ")
+    } else {
+        format!("{prefix}│   ")
+    };
+
+    for (i, child) in node.children.iter().enumerate() {
+        let child_is_last = i == node.children.len() - 1;
+        render_node(out, child, tasks, &child_prefix, child_is_last, false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
 
     fn sample_project() -> ProjectRow {
         ProjectRow {

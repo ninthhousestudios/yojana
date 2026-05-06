@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
+use crate::db::EdgeRow;
 use crate::error::YojanaError;
 
 pub fn would_cycle(
@@ -67,6 +68,96 @@ pub fn blocked_by(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, String)]) -> V
         .filter(|(src, _, status)| *src == task_id && status != "done")
         .map(|(_, tgt, _)| *tgt)
         .collect()
+}
+
+pub struct ForestNode {
+    pub task_id: Uuid,
+    pub children: Vec<ForestNode>,
+    pub seen_before: bool,
+}
+
+/// Build a dependency forest from tasks and depends_on edges.
+///
+/// Direction: edge source=A target=B means "A depends on B", so B must finish
+/// first. In the tree B is parent, A is child (execution order top→down).
+///
+/// Returns (forest_roots, standalone_task_ids).
+pub fn build_dependency_forest(
+    task_ids: &[Uuid],
+    edges: &[EdgeRow],
+) -> (Vec<ForestNode>, Vec<Uuid>) {
+    let task_set: HashSet<Uuid> = task_ids.iter().copied().collect();
+
+    // "unlocks" adjacency: target → [sources] (parent → children)
+    let mut unlocks: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    let mut has_dependency: HashSet<Uuid> = HashSet::new();
+    let mut participates: HashSet<Uuid> = HashSet::new();
+
+    for e in edges {
+        if !task_set.contains(&e.source_task_id) || !task_set.contains(&e.target_task_id) {
+            continue;
+        }
+        unlocks
+            .entry(e.target_task_id)
+            .or_default()
+            .push(e.source_task_id);
+        has_dependency.insert(e.source_task_id);
+        participates.insert(e.source_task_id);
+        participates.insert(e.target_task_id);
+    }
+
+    // Roots: tasks in the graph that have no dependencies themselves
+    let mut roots: Vec<Uuid> = task_ids
+        .iter()
+        .filter(|id| participates.contains(id) && !has_dependency.contains(id))
+        .copied()
+        .collect();
+    roots.sort();
+
+    let standalone: Vec<Uuid> = task_ids
+        .iter()
+        .filter(|id| !participates.contains(id))
+        .copied()
+        .collect();
+
+    let mut visited = HashSet::new();
+    let forest = roots
+        .into_iter()
+        .map(|root| build_subtree(root, &unlocks, &mut visited))
+        .collect();
+
+    (forest, standalone)
+}
+
+fn build_subtree(
+    node: Uuid,
+    unlocks: &HashMap<Uuid, Vec<Uuid>>,
+    visited: &mut HashSet<Uuid>,
+) -> ForestNode {
+    if visited.contains(&node) {
+        return ForestNode {
+            task_id: node,
+            children: Vec::new(),
+            seen_before: true,
+        };
+    }
+    visited.insert(node);
+    let children = match unlocks.get(&node) {
+        Some(kids) => {
+            let mut sorted = kids.clone();
+            sorted.sort();
+            sorted
+                .into_iter()
+                .map(|kid| build_subtree(kid, unlocks, visited))
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    ForestNode {
+        task_id: node,
+        children,
+        seen_before: false,
+    }
 }
 
 #[cfg(test)]

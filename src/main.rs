@@ -13,7 +13,8 @@ use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
 use yojana::db::{CreateTaskParams, Db, TaskQueryFilter, TaskUpdates, TERMINAL_STATUSES};
-use yojana::display::{self, EdgeDirection, EdgeDisplay};
+use yojana::display::{self, EdgeDirection, EdgeDisplay, format_dependency_tree};
+use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
 
 const DONE_RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -62,6 +63,14 @@ enum Command {
         /// Commit SHA to record as a context_ref on the task
         #[arg(long)]
         commit: Option<String>,
+    },
+    /// Show dependency tree for a project
+    Tree {
+        /// Project slug
+        slug: String,
+        /// Include done/wontfix tasks
+        #[arg(long)]
+        all: bool,
     },
     /// Quickly capture a task in a project (status: needs-triage)
     Todo {
@@ -222,6 +231,32 @@ async fn main() -> anyhow::Result<()> {
             };
             let row = db.create_task(params)?;
             println!("{}/{}", row.project_slug, row.sequence_number);
+            Ok(())
+        }
+        Command::Tree { slug, all } => {
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let project = db
+                .get_project(None, Some(&slug))?
+                .ok_or_else(|| anyhow::anyhow!("project '{}' not found", slug))?;
+            let project_ids = db.project_ids_with_descendants(&project.id)?;
+            let cutoff = if all {
+                None
+            } else {
+                Some(chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS)
+            };
+            let filter = TaskQueryFilter {
+                project_ids: Some(project_ids),
+                include_terminal_after: cutoff,
+                ..Default::default()
+            };
+            let tasks = db.list_tasks(&filter)?;
+            let task_ids: Vec<_> = tasks.iter().map(|t| t.id).collect();
+            let edges = db.list_edges_by_type_for_tasks(&task_ids, "depends_on")?;
+            let (forest, standalone) = build_dependency_forest(&task_ids, &edges);
+            let task_map: std::collections::HashMap<uuid::Uuid, &yojana::db::TaskRow> =
+                tasks.iter().map(|t| (t.id, t)).collect();
+            print!("{}", format_dependency_tree(&forest, &standalone, &task_map));
             Ok(())
         }
         Command::Done { id, commit } => {

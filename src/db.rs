@@ -925,6 +925,38 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn list_edges_by_type_for_tasks(
+        &self,
+        task_ids: &[Uuid],
+        edge_type: &str,
+    ) -> Result<Vec<EdgeRow>, YojanaError> {
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock();
+        let placeholders: Vec<String> =
+            (1..=task_ids.len()).map(|i| format!("?{}", i + 1)).collect();
+        let in_clause = placeholders.join(", ");
+        let sql = format!(
+            "SELECT id, source_task_id, target_task_id, edge_type, note, created_at \
+             FROM task_edges WHERE edge_type = ?1 \
+             AND source_task_id IN ({in_clause}) \
+             ORDER BY created_at"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        params.push(Box::new(edge_type.to_string()));
+        for id in task_ids {
+            params.push(Box::new(id.as_bytes().to_vec()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), map_edge_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // --- Conversation methods ---
 
     pub fn append_conversation_message(
