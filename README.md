@@ -38,6 +38,22 @@ Recently done (last 24h)
  myproj/2   Wire baz           done     -          2026-05-06 09:14
 ```
 
+The single-task detail view (`yojana tasks <slug/N>`) renders a Relationships block when the task has edges, showing them grouped by direction-aware label (`Blocks` / `Blocked by`, `Supersedes` / `Superseded by`, `Refines` / `Refined by`, `Motivated by` / `Motivates`, and the symmetric `Relates to`).
+
+### `yojana todo <slug> "<title>" [-m "<body>"]`
+
+Quickly capture a task in a project without an MCP/agent session. Creates the task with status `needs-triage` and prints its `slug/N`.
+
+- The slug accepts the nested form (e.g. `chitta/research`).
+- `-m "body"` populates the description.
+- If `-m` is omitted and stdin is piped, stdin is read as the body.
+
+```sh
+yojana todo yojana "rethink list-view sort"
+yojana todo chitta/research "test embedding compaction" -m "see notebook 2026-05-06"
+git log -1 --pretty=%B | yojana todo yojana "follow up on last commit"
+```
+
 ### `yojana done <slug/N> [--commit <sha>]`
 
 Shorthand to mark a task done. With `--commit`, appends a `git:commit` context_ref recording the SHA the task shipped in. Multiple invocations with different SHAs accumulate.
