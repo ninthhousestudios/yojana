@@ -240,22 +240,26 @@ async fn main() -> anyhow::Result<()> {
                 .get_project(None, Some(&slug))?
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", slug))?;
             let project_ids = db.project_ids_with_descendants(&project.id)?;
-            let cutoff = if all {
-                None
-            } else {
-                Some(chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS)
-            };
             let filter = TaskQueryFilter {
                 project_ids: Some(project_ids),
-                include_terminal_after: cutoff,
                 ..Default::default()
             };
             let tasks = db.list_tasks(&filter)?;
             let task_ids: Vec<_> = tasks.iter().map(|t| t.id).collect();
             let edges = db.list_edges_by_type_for_tasks(&task_ids, "depends_on")?;
-            let (forest, standalone) = build_dependency_forest(&task_ids, &edges);
+            let (mut forest, mut standalone) = build_dependency_forest(&task_ids, &edges);
             let task_map: std::collections::HashMap<uuid::Uuid, &yojana::db::TaskRow> =
                 tasks.iter().map(|t| (t.id, t)).collect();
+            if !all {
+                let cutoff = chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS;
+                forest.retain(|root| !tree_all_stale(root, &task_map, cutoff));
+                standalone.retain(|id| {
+                    task_map
+                        .get(id)
+                        .map(|t| !is_stale_terminal(t, cutoff))
+                        .unwrap_or(false)
+                });
+            }
             print!("{}", format_dependency_tree(&forest, &standalone, &task_map));
             Ok(())
         }
@@ -358,6 +362,23 @@ async fn serve_http() -> anyhow::Result<()> {
     cancel.cancel();
     let _ = std::fs::remove_file(&pid_path);
     Ok(())
+}
+
+fn is_stale_terminal(t: &yojana::db::TaskRow, cutoff: i64) -> bool {
+    TERMINAL_STATUSES.contains(&t.status.as_str())
+        && t.completed_at.map(|c| c < cutoff).unwrap_or(true)
+}
+
+fn tree_all_stale(
+    node: &yojana::graph::ForestNode,
+    tasks: &std::collections::HashMap<uuid::Uuid, &yojana::db::TaskRow>,
+    cutoff: i64,
+) -> bool {
+    let self_stale = tasks
+        .get(&node.task_id)
+        .map(|t| is_stale_terminal(t, cutoff))
+        .unwrap_or(true);
+    self_stale && node.children.iter().all(|c| tree_all_stale(c, tasks, cutoff))
 }
 
 fn resolve_edges_for_display(
