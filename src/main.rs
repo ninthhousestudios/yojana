@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::routing::any_service;
+use axum::routing::{any_service, get};
 use clap::Parser;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
@@ -354,7 +354,9 @@ async fn serve_http() -> anyhow::Result<()> {
     );
 
     #[allow(deprecated)]
-    let app = axum::Router::new().route("/mcp", any_service(mcp_service));
+    let app = axum::Router::new()
+        .route("/mcp", any_service(mcp_service))
+        .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok"})) }));
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

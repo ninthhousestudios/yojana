@@ -104,6 +104,7 @@ pub struct TaskOutput {
     pub files: Vec<String>,
     pub tags: Vec<String>,
     pub history: Vec<HistoryEntry>,
+    pub messages: Vec<serde_json::Value>,
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
@@ -133,6 +134,7 @@ impl From<TaskRow> for TaskOutput {
             files: serde_json::from_str(&row.files).unwrap_or_default(),
             tags: serde_json::from_str(&row.tags).unwrap_or_default(),
             history: serde_json::from_str(&row.history).unwrap_or_default(),
+            messages: Vec::new(),
             created_at: row.created_at,
             updated_at: row.updated_at,
             completed_at: row.completed_at,
@@ -249,7 +251,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let row = db
                 .get_task(id)?
                 .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
-            Ok(serde_json::to_value(TaskOutput::from(row))?)
+            let task_id = row.id;
+            let mut output = TaskOutput::from(row);
+            output.messages = db.get_conversation_messages(&task_id)?;
+            Ok(serde_json::to_value(output)?)
         }
         "update" => {
             let id = args
