@@ -107,7 +107,7 @@ pub fn format_project_detail(p: &ProjectRow) -> String {
     out
 }
 
-pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay]) -> String {
+pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay], messages: &[serde_json::Value]) -> String {
     let mut out = String::new();
     let human_id = format!("{}/{}", t.project_slug, t.sequence_number);
 
@@ -193,6 +193,20 @@ pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay]) -> String {
 
     if let Some(record) = &t.execution_record {
         out.push_str(&format!("\nExecution Record:\n{}\n", record));
+    }
+
+    if !messages.is_empty() {
+        out.push_str("\nComments:\n");
+        for m in messages {
+            let author = m.get("author").and_then(|v| v.as_str()).unwrap_or("?");
+            let text = m.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let ts = m.get("ts").and_then(|v| v.as_i64()).map(format_ts);
+            if let Some(ts) = ts {
+                out.push_str(&format!("  [{}] {}: {}\n", ts, author, text));
+            } else {
+                out.push_str(&format!("  {}: {}\n", author, text));
+            }
+        }
     }
 
     out
@@ -379,7 +393,7 @@ mod tests {
     #[test]
     fn task_detail_shows_fields_and_criteria() {
         let t = sample_task();
-        let out = format_task_detail(&t, &[]);
+        let out = format_task_detail(&t, &[], &[]);
         assert!(out.contains("Task:     myproj/1"));
         assert!(out.contains("Title:    Do the thing"));
         assert!(out.contains("Status:   in-progress"));
@@ -397,7 +411,7 @@ mod tests {
         let mut t = sample_task();
         t.acceptance_criteria = "[]".to_string();
         t.decisions = "[]".to_string();
-        let out = format_task_detail(&t, &[]);
+        let out = format_task_detail(&t, &[], &[]);
         assert!(!out.contains("Acceptance Criteria:"));
         assert!(!out.contains("Decisions:"));
     }
@@ -405,7 +419,7 @@ mod tests {
     #[test]
     fn task_detail_omits_relationships_when_empty() {
         let t = sample_task();
-        let out = format_task_detail(&t, &[]);
+        let out = format_task_detail(&t, &[], &[]);
         assert!(!out.contains("Relationships:"));
     }
 
@@ -438,7 +452,7 @@ mod tests {
                 other_title: "Cross-project".into(),
             },
         ];
-        let out = format_task_detail(&t, &edges);
+        let out = format_task_detail(&t, &edges, &[]);
         assert!(out.contains("Relationships:"));
         assert!(out.contains("Blocked by:"));
         assert!(out.contains("myproj/2 — Upstream task"));

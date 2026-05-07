@@ -144,7 +144,8 @@ async fn main() -> anyhow::Result<()> {
                     .get_task(&identifier)?
                     .ok_or_else(|| anyhow::anyhow!("task '{}' not found", identifier))?;
                 let edges = resolve_edges_for_display(&db, &task)?;
-                println!("{}", display::format_task_detail(&task, &edges));
+                let messages = db.get_conversation_messages(&task.id)?;
+                println!("{}", display::format_task_detail(&task, &edges, &messages));
                 return Ok(());
             }
             let project = db
