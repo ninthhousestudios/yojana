@@ -104,6 +104,9 @@ pub fn format_project_detail(p: &ProjectRow) -> String {
         let desc = p.description.replace("\\n", "\n");
         out.push_str(&format!("\n{}\n", desc));
     }
+    if let Some(ref handoff) = p.handoff {
+        out.push_str(&format!("\nHandoff:\n  {}\n", handoff.replace('\n', "\n  ")));
+    }
     out
 }
 
