@@ -30,6 +30,9 @@ pub struct ProjectArgs {
     /// Parent project slug or id (for list: filter children of this parent)
     #[serde(default)]
     pub parent: Option<String>,
+    /// Handoff note (for update). Set to write; set to empty string to clear.
+    #[serde(default)]
+    pub handoff: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,6 +43,8 @@ pub struct ProjectOutput {
     pub description: String,
     pub status: String,
     pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<ProjectChild>>,
     pub history: Vec<HistoryEntry>,
@@ -64,6 +69,7 @@ impl ProjectOutput {
             description: row.description,
             status: row.status,
             parent_id: row.parent_id.map(|id| id.to_string()),
+            handoff: row.handoff,
             children: None,
             history,
             created_at: row.created_at,
@@ -196,6 +202,9 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
             if let Some(ref status) = args.status {
                 validate_status(status)?;
             }
+            let handoff = args.handoff.map(|h| {
+                if h.is_empty() { None } else { Some(h) }
+            });
             let row = db.update_project(
                 args.id.as_deref(),
                 args.slug.as_deref(),
@@ -203,6 +212,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
                     title: args.title,
                     description: args.description,
                     status: args.status,
+                    handoff,
                 },
             )?;
             Ok(serde_json::to_value(ProjectOutput::from(row))?)

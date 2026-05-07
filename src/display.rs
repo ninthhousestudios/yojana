@@ -309,6 +309,7 @@ mod tests {
             description: "A test project".to_string(),
             status: "active".to_string(),
             parent_id: None,
+            handoff: None,
             history: "[]".to_string(),
             created_at: 1700000000000,
             updated_at: 1700000060000,
