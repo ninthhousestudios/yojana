@@ -86,6 +86,24 @@ enum Command {
         #[arg(long)]
         parent: Option<String>,
     },
+    /// Edit a task's title, description, status, or category
+    #[command(name = "task-edit")]
+    TaskEdit {
+        /// Task identifier (slug/N or UUID)
+        id: String,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New description (-m for short)
+        #[arg(short = 'm', long = "message")]
+        description: Option<String>,
+        /// New status (any valid status, no restrictions)
+        #[arg(long)]
+        status: Option<String>,
+        /// New category (bug, enhancement, experiment). Use --category="" to clear.
+        #[arg(long)]
+        category: Option<String>,
+    },
     /// Quickly capture a task in a project (status: needs-triage)
     Todo {
         /// Project slug (supports nested form, e.g. `chitta/research`)
@@ -219,6 +237,25 @@ async fn main() -> anyhow::Result<()> {
             };
             let project = db.create_project(&slug, &title, description.as_deref().unwrap_or(""), parent_id)?;
             println!("{}", project.slug);
+            Ok(())
+        }
+        Command::TaskEdit { id, title, description, status, category } => {
+            if title.is_none() && description.is_none() && status.is_none() && category.is_none() {
+                anyhow::bail!("nothing to update — pass at least one of --title, -m/--message, --status, --category");
+            }
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let updates = TaskUpdates {
+                title,
+                description,
+                status,
+                force_status: true,
+                category: category.map(|c| if c.is_empty() { None } else { Some(c) }),
+                ..Default::default()
+            };
+            let updated = db.update_task(&id, updates)?;
+            let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
+            println!("{} updated", human_id);
             Ok(())
         }
         Command::Todo { project, title, message } => {

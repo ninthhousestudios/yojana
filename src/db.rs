@@ -92,6 +92,8 @@ pub struct TaskUpdates {
     pub description: Option<String>,
     pub category: Option<Option<String>>,
     pub status: Option<String>,
+    /// Skip state-machine validation for status changes (CLI override).
+    pub force_status: bool,
     pub slice_type: Option<Option<String>>,
     pub acceptance_criteria: Option<String>,
     pub decisions: Option<String>,
@@ -645,7 +647,15 @@ impl Db {
         let mut new_completed_at = task.completed_at;
         if let Some(ref new_status) = updates.status {
             if new_status != &task.status {
-                state::validate_transition(&task.status, new_status)?;
+                if updates.force_status {
+                    if !state::valid_status(new_status) {
+                        return Err(YojanaError::InvalidInput(format!(
+                            "unknown status '{new_status}'"
+                        )));
+                    }
+                } else {
+                    state::validate_transition(&task.status, new_status)?;
+                }
                 history.push(HistoryEntry {
                     ts: now,
                     kind: "status_changed".into(),

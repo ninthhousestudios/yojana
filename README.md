@@ -54,6 +54,20 @@ yojana todo chitta/research "test embedding compaction" -m "see notebook 2026-05
 git log -1 --pretty=%B | yojana todo yojana "follow up on last commit"
 ```
 
+### `yojana task-edit <slug/N> [--title T] [-m DESC] [--status S] [--category C]`
+
+Edit a task's title, description, status, or category. At least one flag is required.
+
+Status changes from the CLI bypass the state machine — any valid status can be set from any other valid status. This lets you skip straight to `done`, reopen from `wontfix` to `in-progress`, etc. The MCP path still enforces the normal transition rules.
+
+Use `--category=""` to clear the category.
+
+```sh
+yojana task-edit yojana/14 --title "revised title" -m "longer description here"
+yojana task-edit yojana/14 --status done
+yojana task-edit yojana/14 --status needs-triage --category bug
+```
+
 ### `yojana done <slug/N> [--commit <sha>]`
 
 Shorthand to mark a task done. With `--commit`, appends a `git:commit` context_ref recording the SHA the task shipped in. Multiple invocations with different SHAs accumulate.

@@ -293,6 +293,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 description: args.description,
                 category: args.category,
                 status: args.status,
+                force_status: false,
                 slice_type: args.slice_type,
                 acceptance_criteria: args
                     .acceptance_criteria
