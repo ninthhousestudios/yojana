@@ -72,6 +72,20 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
+    /// Create a new project
+    #[command(name = "project-create")]
+    ProjectCreate {
+        /// Project slug (lowercase, hyphens)
+        slug: String,
+        /// Project title
+        title: String,
+        /// Optional description
+        #[arg(short = 'm', long = "message")]
+        description: Option<String>,
+        /// Parent project slug (for workstreams)
+        #[arg(long)]
+        parent: Option<String>,
+    },
     /// Quickly capture a task in a project (status: needs-triage)
     Todo {
         /// Project slug (supports nested form, e.g. `chitta/research`)
@@ -189,6 +203,22 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", display::format_tasks_list(&recent_terminal));
                 }
             }
+            Ok(())
+        }
+        Command::ProjectCreate { slug, title, description, parent } => {
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let parent_id = match parent {
+                Some(ref p) => {
+                    let row = db
+                        .get_project(None, Some(p))?
+                        .ok_or_else(|| anyhow::anyhow!("parent project '{}' not found", p))?;
+                    Some(row.id)
+                }
+                None => None,
+            };
+            let project = db.create_project(&slug, &title, description.as_deref().unwrap_or(""), parent_id)?;
+            println!("{}", project.slug);
             Ok(())
         }
         Command::Todo { project, title, message } => {
