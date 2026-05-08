@@ -11,6 +11,7 @@ fn make_task(db: &Db, project_id: uuid::Uuid, title: &str, desc: &str, commits: 
         title: title.into(),
         description: desc.into(),
         category: Some("enhancement".into()),
+        status: None,
         slice_type: Some("AFK".into()),
         acceptance_criteria: serde_json::to_string(&ac).unwrap(),
         decisions: "[]".into(),

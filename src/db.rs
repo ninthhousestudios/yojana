@@ -76,6 +76,7 @@ pub struct CreateTaskParams {
     pub title: String,
     pub description: String,
     pub category: Option<String>,
+    pub status: Option<String>,
     pub slice_type: Option<String>,
     pub acceptance_criteria: String,
     pub decisions: String,
@@ -631,6 +632,13 @@ impl Db {
             payload: serde_json::json!({"sequence_number": seq, "project": params.project_slug}),
         }])?;
 
+        let status = params.status.as_deref().unwrap_or("needs-triage");
+        if !state::valid_status(status) {
+            return Err(YojanaError::InvalidInput(format!(
+                "unknown status '{status}'"
+            )));
+        }
+
         conn.execute(
             "INSERT INTO tasks (\
                 id, project_id, sequence_number, title, description, \
@@ -639,9 +647,9 @@ impl Db {
                 context_refs, files, tags, history, created_at, updated_at\
             ) VALUES (\
                 ?1, ?2, ?3, ?4, ?5, \
-                ?6, 'needs-triage', ?7, ?8, ?9, \
-                ?10, ?11, ?12, ?13, \
-                ?14, ?15, ?16, ?17, ?18, ?18\
+                ?6, ?7, ?8, ?9, ?10, \
+                ?11, ?12, ?13, ?14, \
+                ?15, ?16, ?17, ?18, ?19, ?19\
             )",
             rusqlite::params![
                 id.as_bytes().as_slice(),
@@ -650,6 +658,7 @@ impl Db {
                 params.title,
                 params.description,
                 params.category,
+                status,
                 params.slice_type,
                 params.acceptance_criteria,
                 params.decisions,
@@ -1247,6 +1256,7 @@ mod tests {
             title: title.to_string(),
             description: String::new(),
             category: None,
+            status: None,
             slice_type: None,
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),
@@ -1275,6 +1285,59 @@ mod tests {
         assert_eq!(t3.sequence_number, 3);
         assert_eq!(t1.status, "needs-triage");
         assert_eq!(t1.project_slug, "proj");
+    }
+
+    #[test]
+    fn create_task_respects_status() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let t = db
+            .create_task(CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "With status".into(),
+                description: String::new(),
+                category: None,
+                status: Some("ready-for-agent".into()),
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+            })
+            .unwrap();
+        assert_eq!(t.status, "ready-for-agent");
+
+        let t2 = create_test_task(&db, "proj", "No status");
+        assert_eq!(t2.status, "needs-triage");
+
+        let err = db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug,
+            title: "Bad status".into(),
+            description: String::new(),
+            category: None,
+            status: Some("bogus".into()),
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+        });
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("unknown status"));
     }
 
     #[test]
@@ -1359,6 +1422,7 @@ mod tests {
                 title: "JSON test".into(),
                 description: String::new(),
                 category: Some("enhancement".into()),
+                status: None,
                 slice_type: Some("AFK".into()),
                 acceptance_criteria: ac,
                 decisions: "[]".into(),
@@ -1745,6 +1809,7 @@ mod tests {
             title: "Tagged".into(),
             description: String::new(),
             category: None,
+            status: None,
             slice_type: None,
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),
@@ -1965,6 +2030,7 @@ mod tests {
             title: "Has a%b tag".into(),
             description: String::new(),
             category: None,
+            status: None,
             slice_type: None,
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),
@@ -2001,6 +2067,7 @@ mod tests {
             title: "Clearable".into(),
             description: String::new(),
             category: Some("bug".into()),
+            status: None,
             slice_type: Some("AFK".into()),
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),
@@ -2181,6 +2248,7 @@ mod tests {
             title: "Child task".into(),
             description: String::new(),
             category: None,
+            status: None,
             slice_type: None,
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),
@@ -2220,6 +2288,7 @@ mod tests {
             title: "Nested task".into(),
             description: String::new(),
             category: None,
+            status: None,
             slice_type: None,
             acceptance_criteria: "[]".into(),
             decisions: "[]".into(),

@@ -229,6 +229,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 title: title.to_string(),
                 description: args.description.unwrap_or_default(),
                 category: args.category.flatten(),
+                status: args.status.clone(),
                 slice_type: args.slice_type.flatten(),
                 acceptance_criteria: to_json(&args.acceptance_criteria.unwrap_or_default())?,
                 decisions: to_json(&args.decisions.unwrap_or_default())?,

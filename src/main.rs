@@ -286,6 +286,7 @@ async fn main() -> anyhow::Result<()> {
                 title,
                 description,
                 category: None,
+                status: None,
                 slice_type: None,
                 acceptance_criteria: "[]".to_string(),
                 decisions: "[]".to_string(),
