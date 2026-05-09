@@ -193,7 +193,12 @@ mod tests {
 
     #[test]
     fn no_cycle_diamond() {
-        let edges = vec![(id(1), id(2)), (id(1), id(3)), (id(2), id(4)), (id(3), id(4))];
+        let edges = vec![
+            (id(1), id(2)),
+            (id(1), id(3)),
+            (id(2), id(4)),
+            (id(3), id(4)),
+        ];
         assert!(would_cycle(&edges, id(4), id(5)).is_ok());
     }
 
@@ -216,10 +221,7 @@ mod tests {
 
     #[test]
     fn ready_all_deps_done() {
-        let deps = vec![
-            (id(1), id(2), "done".into()),
-            (id(1), id(3), "done".into()),
-        ];
+        let deps = vec![(id(1), id(2), "done".into()), (id(1), id(3), "done".into())];
         assert!(is_ready(id(1), &deps));
     }
 
@@ -247,9 +249,7 @@ mod tests {
 
     #[test]
     fn ready_ignores_other_tasks_deps() {
-        let deps = vec![
-            (id(2), id(3), "in-progress".into()),
-        ];
+        let deps = vec![(id(2), id(3), "in-progress".into())];
         assert!(is_ready(id(1), &deps));
     }
 }

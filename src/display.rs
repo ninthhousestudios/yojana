@@ -105,12 +105,19 @@ pub fn format_project_detail(p: &ProjectRow) -> String {
         out.push_str(&format!("\n{}\n", desc));
     }
     if let Some(ref handoff) = p.handoff {
-        out.push_str(&format!("\nHandoff:\n  {}\n", handoff.replace('\n', "\n  ")));
+        out.push_str(&format!(
+            "\nHandoff:\n  {}\n",
+            handoff.replace('\n', "\n  ")
+        ));
     }
     out
 }
 
-pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay], messages: &[serde_json::Value]) -> String {
+pub fn format_task_detail(
+    t: &TaskRow,
+    edges: &[EdgeDisplay],
+    messages: &[serde_json::Value],
+) -> String {
     let mut out = String::new();
     let human_id = format!("{}/{}", t.project_slug, t.sequence_number);
 
@@ -147,7 +154,11 @@ pub fn format_task_detail(t: &TaskRow, edges: &[EdgeDisplay], messages: &[serde_
         for (label, items) in grouped {
             for (i, e) in items.iter().enumerate() {
                 let prefix = if i == 0 {
-                    format!("  {:width$}  ", format!("{}:", label), width = label_width + 1)
+                    format!(
+                        "  {:width$}  ",
+                        format!("{}:", label),
+                        width = label_width + 1
+                    )
                 } else {
                     " ".repeat(label_width + 5)
                 };
@@ -330,7 +341,8 @@ mod tests {
             category: Some("enhancement".to_string()),
             status: "in-progress".to_string(),
             slice_type: Some("AFK".to_string()),
-            acceptance_criteria: r#"[{"text":"it works","done":true},{"text":"it's fast","done":false}]"#.to_string(),
+            acceptance_criteria:
+                r#"[{"text":"it works","done":true},{"text":"it's fast","done":false}]"#.to_string(),
             decisions: r#"["use Rust"]"#.to_string(),
             implementation_plan: None,
             execution_record: None,

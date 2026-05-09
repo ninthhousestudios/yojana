@@ -8,7 +8,9 @@ fn full_flow_v0() {
     let db = Db::open_in_memory().unwrap();
 
     // 2. Create project
-    let project = db.create_project("yojana", "Yojana task graph server", "", None).unwrap();
+    let project = db
+        .create_project("yojana", "Yojana task graph server", "", None)
+        .unwrap();
     assert_eq!(project.slug, "yojana");
 
     // 3. Create three tasks: A (no deps), B (depends_on A), C (depends_on B)
@@ -79,8 +81,10 @@ fn full_flow_v0() {
     assert_eq!(task_b.sequence_number, 2);
     assert_eq!(task_c.sequence_number, 3);
 
-    db.create_edge(task_b.id, task_a.id, "depends_on", None).unwrap();
-    db.create_edge(task_c.id, task_b.id, "depends_on", None).unwrap();
+    db.create_edge(task_b.id, task_a.id, "depends_on", None)
+        .unwrap();
+    db.create_edge(task_c.id, task_b.id, "depends_on", None)
+        .unwrap();
 
     // 4. Ready shows only A (it has no deps; B and C are blocked)
     let deps = db.list_depends_on_with_status().unwrap();
@@ -90,9 +94,30 @@ fn full_flow_v0() {
 
     // 5. Transition A through the pipeline
     let id_a = task_a.id.to_string();
-    db.update_task(&id_a, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-    db.update_task(&id_a, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
-    db.update_task(&id_a, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
+    db.update_task(
+        &id_a,
+        TaskUpdates {
+            status: Some("ready-for-agent".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    db.update_task(
+        &id_a,
+        TaskUpdates {
+            status: Some("in-progress".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    db.update_task(
+        &id_a,
+        TaskUpdates {
+            status: Some("done".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     // 6. Now B should be ready (A is done), C still blocked
     let deps = db.list_depends_on_with_status().unwrap();
@@ -126,7 +151,8 @@ fn full_flow_v0() {
     assert_eq!(working_c.neighbors[0].human_id, "yojana/2");
 
     // 9. Add conversation message to B
-    db.append_conversation_message(&task_b.id, "Starting implementation", Some("agent")).unwrap();
+    db.append_conversation_message(&task_b.id, "Starting implementation", Some("agent"))
+        .unwrap();
 
     // 10. Working context for B — conversation appears
     let b_edges = db.list_edges_for_task(&task_b.id).unwrap();
@@ -140,16 +166,21 @@ fn full_flow_v0() {
     let b_messages = db.get_conversation_messages(&task_b.id).unwrap();
     let working_b = context::working(&task_b, &b_neighbors, &b_messages, 10);
     assert_eq!(working_b.recent_messages.len(), 1);
-    assert_eq!(working_b.recent_messages[0]["text"], "Starting implementation");
+    assert_eq!(
+        working_b.recent_messages[0]["text"],
+        "Starting implementation"
+    );
     assert_eq!(working_b.recent_messages[0]["author"], "agent");
     assert_eq!(working_b.context_refs.len(), 1);
     assert_eq!(working_b.context_refs[0]["type"], "git:commit");
 
     // 11. Query by status=done — only A
-    let done_tasks = db.list_tasks(&TaskQueryFilter {
-        status: Some("done".into()),
-        ..Default::default()
-    }).unwrap();
+    let done_tasks = db
+        .list_tasks(&TaskQueryFilter {
+            status: Some("done".into()),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(done_tasks.len(), 1);
     assert_eq!(done_tasks[0].title, "Task A");
 

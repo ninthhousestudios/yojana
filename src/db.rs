@@ -140,8 +140,13 @@ const VALID_PROJECT_STATUSES: &[&str] = &["active", "paused", "archived"];
 
 // --- Edge types ---
 
-pub const VALID_EDGE_TYPES: &[&str] =
-    &["depends_on", "relates_to", "supersedes", "refines", "motivated_by"];
+pub const VALID_EDGE_TYPES: &[&str] = &[
+    "depends_on",
+    "relates_to",
+    "supersedes",
+    "refines",
+    "motivated_by",
+];
 
 #[derive(Debug)]
 pub struct EdgeRow {
@@ -164,7 +169,11 @@ fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
         .get::<_, Option<Vec<u8>>>("parent_id")?
         .map(|bytes| {
             Uuid::from_slice(&bytes).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
             })
         })
         .transpose()?;
@@ -298,13 +307,11 @@ fn parse_task_identifier(s: &str) -> Result<TaskIdentifier, YojanaError> {
 }
 
 fn next_sequence_number(conn: &Connection, project_id: &Uuid) -> Result<i64, YojanaError> {
-    let mut stmt = conn.prepare(
-        "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM tasks WHERE project_id = ?1",
-    )?;
-    let seq: i64 = stmt.query_row(
-        rusqlite::params![project_id.as_bytes().as_slice()],
-        |row| row.get(0),
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM tasks WHERE project_id = ?1")?;
+    let seq: i64 = stmt.query_row(rusqlite::params![project_id.as_bytes().as_slice()], |row| {
+        row.get(0)
+    })?;
     Ok(seq)
 }
 
@@ -345,14 +352,32 @@ impl Db {
 
     fn run_migrations(&self) -> Result<(), rusqlite::Error> {
         const MIGRATIONS: &[(&str, &str)] = &[
-            ("0001_initial", include_str!("../migrations/0001_initial.sql")),
+            (
+                "0001_initial",
+                include_str!("../migrations/0001_initial.sql"),
+            ),
             ("0002_tasks", include_str!("../migrations/0002_tasks.sql")),
             ("0003_edges", include_str!("../migrations/0003_edges.sql")),
-            ("0004_conversations", include_str!("../migrations/0004_conversations.sql")),
-            ("0005_in_progress_rename", include_str!("../migrations/0005_in-progress-rename.sql")),
-            ("0006_parent_projects", include_str!("../migrations/0006_parent-projects.sql")),
-            ("0007_completed_at", include_str!("../migrations/0007_completed_at.sql")),
-            ("0008_project_handoff", include_str!("../migrations/0008_project-handoff.sql")),
+            (
+                "0004_conversations",
+                include_str!("../migrations/0004_conversations.sql"),
+            ),
+            (
+                "0005_in_progress_rename",
+                include_str!("../migrations/0005_in-progress-rename.sql"),
+            ),
+            (
+                "0006_parent_projects",
+                include_str!("../migrations/0006_parent-projects.sql"),
+            ),
+            (
+                "0007_completed_at",
+                include_str!("../migrations/0007_completed_at.sql"),
+            ),
+            (
+                "0008_project_handoff",
+                include_str!("../migrations/0008_project-handoff.sql"),
+            ),
         ];
 
         let conn = self.conn.lock();
@@ -515,7 +540,10 @@ impl Db {
         Ok(ids)
     }
 
-    pub fn project_ids_with_descendants(&self, project_id: &Uuid) -> Result<Vec<Uuid>, YojanaError> {
+    pub fn project_ids_with_descendants(
+        &self,
+        project_id: &Uuid,
+    ) -> Result<Vec<Uuid>, YojanaError> {
         let mut ids = vec![*project_id];
         ids.extend(self.list_descendant_project_ids(project_id)?);
         Ok(ids)
@@ -567,7 +595,11 @@ impl Db {
         }
 
         if let Some(ref handoff_opt) = updates.handoff {
-            let verb = if handoff_opt.is_some() { "set" } else { "cleared" };
+            let verb = if handoff_opt.is_some() {
+                "set"
+            } else {
+                "cleared"
+            };
             let mut payload = serde_json::json!({"action": verb});
             if let Some(ref prev) = project.handoff {
                 payload["previous"] = serde_json::json!(prev);
@@ -580,7 +612,10 @@ impl Db {
         }
 
         let new_title = updates.title.as_deref().unwrap_or(&project.title);
-        let new_desc = updates.description.as_deref().unwrap_or(&project.description);
+        let new_desc = updates
+            .description
+            .as_deref()
+            .unwrap_or(&project.description);
         let new_status = updates.status.as_deref().unwrap_or(&project.status);
         let new_handoff: Option<&str> = match updates.handoff {
             Some(ref inner) => inner.as_deref(),
@@ -608,9 +643,14 @@ impl Db {
             placeholders.join(", ")
         );
         let mut stmt = conn.prepare(&sql)?;
-        let params: Vec<Vec<u8>> = project_ids.iter().map(|id| id.as_bytes().to_vec()).collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<Vec<u8>> = project_ids
+            .iter()
+            .map(|id| id.as_bytes().to_vec())
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|p| p as &dyn rusqlite::types::ToSql)
+            .collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -762,7 +802,10 @@ impl Db {
             None => task.root_cause.as_deref(),
             Some(inner) => inner.as_deref(),
         };
-        let new_refs = updates.context_refs.as_deref().unwrap_or(&task.context_refs);
+        let new_refs = updates
+            .context_refs
+            .as_deref()
+            .unwrap_or(&task.context_refs);
         let new_files = updates.files.as_deref().unwrap_or(&task.files);
         let new_tags = updates.tags.as_deref().unwrap_or(&task.tags);
         let history_json = serde_json::to_string(&history)?;
@@ -872,16 +915,15 @@ impl Db {
         }
 
         let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
             .query_map(param_refs.as_slice(), map_task_row)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
-    pub fn list_depends_on_with_status(
-        &self,
-    ) -> Result<Vec<(Uuid, Uuid, String)>, YojanaError> {
+    pub fn list_depends_on_with_status(&self) -> Result<Vec<(Uuid, Uuid, String)>, YojanaError> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT e.source_task_id, e.target_task_id, t.status \
@@ -915,9 +957,7 @@ impl Db {
             )));
         }
         if source_task_id == target_task_id {
-            return Err(YojanaError::InvalidInput(
-                "self-edges not allowed".into(),
-            ));
+            return Err(YojanaError::InvalidInput("self-edges not allowed".into()));
         }
 
         let conn = self.conn.lock();
@@ -958,8 +998,7 @@ impl Db {
             other => YojanaError::Db(other),
         })?;
 
-        get_edge_by_id(&conn, &id)?
-            .ok_or_else(|| YojanaError::NotFound("just-created edge".into()))
+        get_edge_by_id(&conn, &id)?.ok_or_else(|| YojanaError::NotFound("just-created edge".into()))
     }
 
     pub fn delete_edge(&self, id: &Uuid) -> Result<(), YojanaError> {
@@ -982,7 +1021,10 @@ impl Db {
              ORDER BY created_at",
         )?;
         let rows = stmt
-            .query_map(rusqlite::params![task_id.as_bytes().as_slice()], map_edge_row)?
+            .query_map(
+                rusqlite::params![task_id.as_bytes().as_slice()],
+                map_edge_row,
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -996,8 +1038,9 @@ impl Db {
             return Ok(Vec::new());
         }
         let conn = self.conn.lock();
-        let placeholders: Vec<String> =
-            (1..=task_ids.len()).map(|i| format!("?{}", i + 1)).collect();
+        let placeholders: Vec<String> = (1..=task_ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect();
         let in_clause = placeholders.join(", ");
         let sql = format!(
             "SELECT id, source_task_id, target_task_id, edge_type, note, created_at \
@@ -1038,10 +1081,9 @@ impl Db {
 
         let existing: Option<(Vec<u8>, String)> = conn
             .prepare("SELECT id, messages FROM task_conversations WHERE task_id = ?1")?
-            .query_row(
-                rusqlite::params![task_id.as_bytes().as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row(rusqlite::params![task_id.as_bytes().as_slice()], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .optional()?;
 
         if let Some((id_bytes, messages_json)) = existing {
@@ -1083,10 +1125,9 @@ impl Db {
         let conn = self.conn.lock();
         let messages_json: Option<String> = conn
             .prepare("SELECT messages FROM task_conversations WHERE task_id = ?1")?
-            .query_row(
-                rusqlite::params![task_id.as_bytes().as_slice()],
-                |row| row.get(0),
-            )
+            .query_row(rusqlite::params![task_id.as_bytes().as_slice()], |row| {
+                row.get(0)
+            })
             .optional()?;
 
         match messages_json {
@@ -1152,13 +1193,18 @@ mod tests {
     #[test]
     fn create_and_get_project() {
         let db = test_db();
-        let p = db.create_project("test-proj", "Test Project", "A test", None).unwrap();
+        let p = db
+            .create_project("test-proj", "Test Project", "A test", None)
+            .unwrap();
         assert_eq!(p.slug, "test-proj");
         assert_eq!(p.title, "Test Project");
         assert_eq!(p.description, "A test");
         assert_eq!(p.status, "active");
 
-        let by_id = db.get_project(Some(&p.id.to_string()), None).unwrap().unwrap();
+        let by_id = db
+            .get_project(Some(&p.id.to_string()), None)
+            .unwrap()
+            .unwrap();
         assert_eq!(by_id.slug, "test-proj");
 
         let by_slug = db.get_project(None, Some("test-proj")).unwrap().unwrap();
@@ -1246,10 +1292,7 @@ mod tests {
     // --- Task tests ---
 
     fn create_test_task(db: &Db, project_slug: &str, title: &str) -> TaskRow {
-        let p = db
-            .get_project(None, Some(project_slug))
-            .unwrap()
-            .unwrap();
+        let p = db.get_project(None, Some(project_slug)).unwrap().unwrap();
         db.create_task(CreateTaskParams {
             project_id: p.id,
             project_slug: p.slug,
@@ -1574,14 +1617,51 @@ mod tests {
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
 
-        db.update_task(&id, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("ready-for-agent".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("in-progress".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        let err = db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap_err();
+        let err = db
+            .update_task(
+                &id,
+                TaskUpdates {
+                    status: Some("in-progress".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
         assert!(err.to_string().contains("invalid transition"));
 
-        let reopened = db.update_task(&id, TaskUpdates { status: Some("needs-triage".into()), ..Default::default() }).unwrap();
+        let reopened = db
+            .update_task(
+                &id,
+                TaskUpdates {
+                    status: Some("needs-triage".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         assert_eq!(reopened.status, "needs-triage");
     }
 
@@ -1639,7 +1719,9 @@ mod tests {
         let t2 = create_test_task(&db, "proj", "Task 2");
 
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
-        let err = db.create_edge(t1.id, t2.id, "depends_on", None).unwrap_err();
+        let err = db
+            .create_edge(t1.id, t2.id, "depends_on", None)
+            .unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
@@ -1665,7 +1747,9 @@ mod tests {
         let t2 = create_test_task(&db, "proj", "Task 2");
 
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
-        let err = db.create_edge(t2.id, t1.id, "depends_on", None).unwrap_err();
+        let err = db
+            .create_edge(t2.id, t1.id, "depends_on", None)
+            .unwrap_err();
         assert!(err.to_string().contains("cycle"));
     }
 
@@ -1679,7 +1763,9 @@ mod tests {
 
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
         db.create_edge(t2.id, t3.id, "depends_on", None).unwrap();
-        let err = db.create_edge(t3.id, t1.id, "depends_on", None).unwrap_err();
+        let err = db
+            .create_edge(t3.id, t1.id, "depends_on", None)
+            .unwrap_err();
         assert!(err.to_string().contains("cycle"));
     }
 
@@ -1713,9 +1799,7 @@ mod tests {
         let t1 = create_test_task(&db, "alpha", "Task A");
         let t2 = create_test_task(&db, "beta", "Task B");
 
-        let edge = db
-            .create_edge(t1.id, t2.id, "motivated_by", None)
-            .unwrap();
+        let edge = db.create_edge(t1.id, t2.id, "motivated_by", None).unwrap();
         assert_eq!(edge.source_task_id, t1.id);
         assert_eq!(edge.target_task_id, t2.id);
     }
@@ -1750,7 +1834,14 @@ mod tests {
 
     fn advance_to(db: &Db, id: &str, statuses: &[&str]) {
         for s in statuses {
-            db.update_task(id, TaskUpdates { status: Some((*s).into()), ..Default::default() }).unwrap();
+            db.update_task(
+                id,
+                TaskUpdates {
+                    status: Some((*s).into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         }
     }
 
@@ -1774,10 +1865,12 @@ mod tests {
 
         advance_to(&db, &t1.id.to_string(), &["ready-for-agent"]);
 
-        let tasks = db.list_tasks(&TaskQueryFilter {
-            status: Some("ready-for-agent".into()),
-            ..Default::default()
-        }).unwrap();
+        let tasks = db
+            .list_tasks(&TaskQueryFilter {
+                status: Some("ready-for-agent".into()),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "A");
     }
@@ -1790,10 +1883,12 @@ mod tests {
         create_test_task(&db, "alpha", "A");
         create_test_task(&db, "beta", "B");
 
-        let tasks = db.list_tasks(&TaskQueryFilter {
-            project_ids: Some(vec![p1.id]),
-            ..Default::default()
-        }).unwrap();
+        let tasks = db
+            .list_tasks(&TaskQueryFilter {
+                project_ids: Some(vec![p1.id]),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "A");
     }
@@ -1820,13 +1915,16 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        }).unwrap();
+        })
+        .unwrap();
         create_test_task(&db, "proj", "Untagged");
 
-        let tasks = db.list_tasks(&TaskQueryFilter {
-            tag: Some("infra".into()),
-            ..Default::default()
-        }).unwrap();
+        let tasks = db
+            .list_tasks(&TaskQueryFilter {
+                tag: Some("infra".into()),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Tagged");
     }
@@ -1911,8 +2009,10 @@ mod tests {
         let mid1 = create_test_task(&db, "proj", "Mid1");
         let mid2 = create_test_task(&db, "proj", "Mid2");
 
-        db.create_edge(leaf.id, mid1.id, "depends_on", None).unwrap();
-        db.create_edge(leaf.id, mid2.id, "depends_on", None).unwrap();
+        db.create_edge(leaf.id, mid1.id, "depends_on", None)
+            .unwrap();
+        db.create_edge(leaf.id, mid2.id, "depends_on", None)
+            .unwrap();
 
         let mid1_id = mid1.id.to_string();
         let mid2_id = mid2.id.to_string();
@@ -1938,11 +2038,15 @@ mod tests {
         let msgs = db.get_conversation_messages(&t.id).unwrap();
         assert!(msgs.is_empty());
 
-        let m1 = db.append_conversation_message(&t.id, "hello", Some("agent")).unwrap();
+        let m1 = db
+            .append_conversation_message(&t.id, "hello", Some("agent"))
+            .unwrap();
         assert_eq!(m1["text"], "hello");
         assert_eq!(m1["author"], "agent");
 
-        let m2 = db.append_conversation_message(&t.id, "world", None).unwrap();
+        let m2 = db
+            .append_conversation_message(&t.id, "world", None)
+            .unwrap();
         assert_eq!(m2["text"], "world");
         assert_eq!(m2["author"], "user");
 
@@ -1964,7 +2068,8 @@ mod tests {
             conn.execute(
                 "DELETE FROM tasks WHERE id = ?1",
                 rusqlite::params![t.id.as_bytes().as_slice()],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let msgs = db.get_conversation_messages(&t.id).unwrap();
@@ -1996,7 +2101,8 @@ mod tests {
         let t1 = create_test_task(&db, "proj", "Main");
         let t2 = create_test_task(&db, "proj", "Neighbor");
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
-        db.append_conversation_message(&t1.id, "started work", Some("agent")).unwrap();
+        db.append_conversation_message(&t1.id, "started work", Some("agent"))
+            .unwrap();
 
         let edges = db.list_edges_for_task(&t1.id).unwrap();
         let nids = crate::context::neighbor_ids(t1.id, &edges);
@@ -2041,18 +2147,23 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        }).unwrap();
+        })
+        .unwrap();
 
-        let matches = db.list_tasks(&TaskQueryFilter {
-            tag: Some("a%b".into()),
-            ..Default::default()
-        }).unwrap();
+        let matches = db
+            .list_tasks(&TaskQueryFilter {
+                tag: Some("a%b".into()),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(matches.len(), 1);
 
-        let no_match = db.list_tasks(&TaskQueryFilter {
-            tag: Some("axb".into()),
-            ..Default::default()
-        }).unwrap();
+        let no_match = db
+            .list_tasks(&TaskQueryFilter {
+                tag: Some("axb".into()),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(no_match.len(), 0, "LIKE wildcard should not match 'axb'");
     }
 
@@ -2061,32 +2172,39 @@ mod tests {
         let db = test_db();
         db.create_project("proj", "Project", "", None).unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
-        let t = db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug.clone(),
-            title: "Clearable".into(),
-            description: String::new(),
-            category: Some("bug".into()),
-            status: None,
-            slice_type: Some("AFK".into()),
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: Some("plan".into()),
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-        }).unwrap();
+        let t = db
+            .create_task(CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Clearable".into(),
+                description: String::new(),
+                category: Some("bug".into()),
+                status: None,
+                slice_type: Some("AFK".into()),
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: Some("plan".into()),
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+            })
+            .unwrap();
         assert_eq!(t.category.as_deref(), Some("bug"));
 
-        let cleared = db.update_task(&t.id.to_string(), TaskUpdates {
-            category: Some(None),
-            slice_type: Some(None),
-            implementation_plan: Some(None),
-            ..Default::default()
-        }).unwrap();
+        let cleared = db
+            .update_task(
+                &t.id.to_string(),
+                TaskUpdates {
+                    category: Some(None),
+                    slice_type: Some(None),
+                    implementation_plan: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         assert_eq!(cleared.category, None);
         assert_eq!(cleared.slice_type, None);
         assert_eq!(cleared.implementation_plan, None);
@@ -2096,10 +2214,16 @@ mod tests {
     fn project_status_validation_rejects_typo() {
         let db = test_db();
         db.create_project("proj", "Project", "", None).unwrap();
-        let err = db.update_project(None, Some("proj"), ProjectUpdates {
-            status: Some("actve".into()),
-            ..Default::default()
-        }).unwrap_err();
+        let err = db
+            .update_project(
+                None,
+                Some("proj"),
+                ProjectUpdates {
+                    status: Some("actve".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
         assert!(err.to_string().contains("invalid project status"));
     }
 
@@ -2107,10 +2231,16 @@ mod tests {
     fn project_status_validation_accepts_valid() {
         let db = test_db();
         db.create_project("proj", "Project", "", None).unwrap();
-        let p = db.update_project(None, Some("proj"), ProjectUpdates {
-            status: Some("paused".into()),
-            ..Default::default()
-        }).unwrap();
+        let p = db
+            .update_project(
+                None,
+                Some("proj"),
+                ProjectUpdates {
+                    status: Some("paused".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         assert_eq!(p.status, "paused");
     }
 
@@ -2132,7 +2262,10 @@ mod tests {
             .unwrap()
             .query_row([], |row| row.get(0))
             .unwrap();
-        assert!(count >= 5, "expected at least 5 migrations applied, got {count}");
+        assert!(
+            count >= 5,
+            "expected at least 5 migrations applied, got {count}"
+        );
     }
 
     #[test]
@@ -2154,17 +2287,21 @@ mod tests {
             create_test_task(&db, "proj", &format!("Task {i}"));
         }
 
-        let page = db.list_tasks(&TaskQueryFilter {
-            limit: Some(2),
-            ..Default::default()
-        }).unwrap();
+        let page = db
+            .list_tasks(&TaskQueryFilter {
+                limit: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(page.len(), 2);
 
-        let page2 = db.list_tasks(&TaskQueryFilter {
-            limit: Some(2),
-            offset: Some(2),
-            ..Default::default()
-        }).unwrap();
+        let page2 = db
+            .list_tasks(&TaskQueryFilter {
+                limit: Some(2),
+                offset: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(page2.len(), 2);
         assert_ne!(page[0].id, page2[0].id);
     }
@@ -2173,7 +2310,8 @@ mod tests {
     fn pagination_projects() {
         let db = test_db();
         for i in 0..5 {
-            db.create_project(&format!("p{i}"), &format!("Project {i}"), "", None).unwrap();
+            db.create_project(&format!("p{i}"), &format!("Project {i}"), "", None)
+                .unwrap();
         }
 
         let page = db.list_projects(None, None, Some(3), None).unwrap();
@@ -2187,7 +2325,9 @@ mod tests {
     fn create_project_with_parent() {
         let db = test_db();
         let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
-        let child = db.create_project("chitta/research", "Chitta Research", "", Some(parent.id)).unwrap();
+        let child = db
+            .create_project("chitta/research", "Chitta Research", "", Some(parent.id))
+            .unwrap();
         assert_eq!(child.parent_id, Some(parent.id));
         assert_eq!(child.slug, "chitta/research");
     }
@@ -2196,7 +2336,8 @@ mod tests {
     fn list_projects_roots_only() {
         let db = test_db();
         let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
-        db.create_project("chitta/research", "Research", "", Some(parent.id)).unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id))
+            .unwrap();
         db.create_project("yojana", "Yojana", "", None).unwrap();
 
         let roots = db.list_projects(None, Some(None), None, None).unwrap();
@@ -2208,11 +2349,15 @@ mod tests {
     fn list_projects_children_of_parent() {
         let db = test_db();
         let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
-        db.create_project("chitta/core", "Core", "", Some(parent.id)).unwrap();
-        db.create_project("chitta/research", "Research", "", Some(parent.id)).unwrap();
+        db.create_project("chitta/core", "Core", "", Some(parent.id))
+            .unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id))
+            .unwrap();
         db.create_project("yojana", "Yojana", "", None).unwrap();
 
-        let children = db.list_projects(None, Some(Some(&parent.id)), None, None).unwrap();
+        let children = db
+            .list_projects(None, Some(Some(&parent.id)), None, None)
+            .unwrap();
         assert_eq!(children.len(), 2);
         let slugs: Vec<&str> = children.iter().map(|p| p.slug.as_str()).collect();
         assert!(slugs.contains(&"chitta/core"));
@@ -2223,9 +2368,18 @@ mod tests {
     fn descendant_project_ids() {
         let db = test_db();
         let root = db.create_project("chitta", "Chitta", "", None).unwrap();
-        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
-        db.create_project("chitta/research/embed", "Embed Research", "", Some(child.id)).unwrap();
-        db.create_project("chitta/core", "Core", "", Some(root.id)).unwrap();
+        let child = db
+            .create_project("chitta/research", "Research", "", Some(root.id))
+            .unwrap();
+        db.create_project(
+            "chitta/research/embed",
+            "Embed Research",
+            "",
+            Some(child.id),
+        )
+        .unwrap();
+        db.create_project("chitta/core", "Core", "", Some(root.id))
+            .unwrap();
 
         let descendants = db.list_descendant_project_ids(&root.id).unwrap();
         assert_eq!(descendants.len(), 3);
@@ -2238,7 +2392,9 @@ mod tests {
     fn task_query_rolls_up_descendants() {
         let db = test_db();
         let root = db.create_project("chitta", "Chitta", "", None).unwrap();
-        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
+        let child = db
+            .create_project("chitta/research", "Research", "", Some(root.id))
+            .unwrap();
 
         create_test_task(&db, "chitta", "Root task");
         // Create task in child project
@@ -2259,20 +2415,25 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        }).unwrap();
+        })
+        .unwrap();
 
         let all_ids = db.project_ids_with_descendants(&root.id).unwrap();
-        let tasks = db.list_tasks(&TaskQueryFilter {
-            project_ids: Some(all_ids),
-            ..Default::default()
-        }).unwrap();
+        let tasks = db
+            .list_tasks(&TaskQueryFilter {
+                project_ids: Some(all_ids),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(tasks.len(), 2);
 
         // Query just the child
-        let child_tasks = db.list_tasks(&TaskQueryFilter {
-            project_ids: Some(vec![child.id]),
-            ..Default::default()
-        }).unwrap();
+        let child_tasks = db
+            .list_tasks(&TaskQueryFilter {
+                project_ids: Some(vec![child.id]),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(child_tasks.len(), 1);
         assert_eq!(child_tasks[0].title, "Child task");
     }
@@ -2281,7 +2442,9 @@ mod tests {
     fn parse_task_id_with_nested_slug() {
         let db = test_db();
         let root = db.create_project("chitta", "Chitta", "", None).unwrap();
-        let child = db.create_project("chitta/research", "Research", "", Some(root.id)).unwrap();
+        let child = db
+            .create_project("chitta/research", "Research", "", Some(root.id))
+            .unwrap();
         db.create_task(CreateTaskParams {
             project_id: child.id,
             project_slug: "chitta/research".into(),
@@ -2299,7 +2462,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        }).unwrap();
+        })
+        .unwrap();
 
         let task = db.get_task("chitta/research/1").unwrap().unwrap();
         assert_eq!(task.title, "Nested task");
@@ -2309,19 +2473,33 @@ mod tests {
     #[test]
     fn handoff_set_and_clear() {
         let db = test_db();
-        let proj = db.create_project("htest", "Handoff Test", "", None).unwrap();
+        let proj = db
+            .create_project("htest", "Handoff Test", "", None)
+            .unwrap();
         assert!(proj.handoff.is_none());
 
-        let updated = db.update_project(
-            None, Some("htest"),
-            ProjectUpdates { handoff: Some(Some("pick up auth work".into())), ..Default::default() },
-        ).unwrap();
+        let updated = db
+            .update_project(
+                None,
+                Some("htest"),
+                ProjectUpdates {
+                    handoff: Some(Some("pick up auth work".into())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         assert_eq!(updated.handoff.as_deref(), Some("pick up auth work"));
 
-        let cleared = db.update_project(
-            None, Some("htest"),
-            ProjectUpdates { handoff: Some(None), ..Default::default() },
-        ).unwrap();
+        let cleared = db
+            .update_project(
+                None,
+                Some("htest"),
+                ProjectUpdates {
+                    handoff: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         assert!(cleared.handoff.is_none());
     }
 
@@ -2331,9 +2509,14 @@ mod tests {
         db.create_project("ha", "A", "", None).unwrap();
         db.create_project("hb", "B", "", None).unwrap();
         db.update_project(
-            None, Some("ha"),
-            ProjectUpdates { handoff: Some(Some("handoff a".into())), ..Default::default() },
-        ).unwrap();
+            None,
+            Some("ha"),
+            ProjectUpdates {
+                handoff: Some(Some("handoff a".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let a = db.get_project(None, Some("ha")).unwrap().unwrap();
         let b = db.get_project(None, Some("hb")).unwrap().unwrap();
@@ -2347,11 +2530,18 @@ mod tests {
     fn get_handoffs_includes_descendants() {
         let db = test_db();
         let root = db.create_project("parent", "Parent", "", None).unwrap();
-        let _child = db.create_project("parent/child", "Child", "", Some(root.id)).unwrap();
+        let _child = db
+            .create_project("parent/child", "Child", "", Some(root.id))
+            .unwrap();
         db.update_project(
-            None, Some("parent/child"),
-            ProjectUpdates { handoff: Some(Some("child handoff".into())), ..Default::default() },
-        ).unwrap();
+            None,
+            Some("parent/child"),
+            ProjectUpdates {
+                handoff: Some(Some("child handoff".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let all_ids = db.project_ids_with_descendants(&root.id).unwrap();
         let mut ids = vec![root.id];

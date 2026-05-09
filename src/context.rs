@@ -127,10 +127,7 @@ pub struct ReviewBundle {
     pub neighbors: Vec<SummaryBundle>,
 }
 
-pub fn review(
-    task: &TaskRow,
-    neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)],
-) -> ReviewBundle {
+pub fn review(task: &TaskRow, neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)]) -> ReviewBundle {
     let all_refs = json_array(&task.context_refs);
     let mut git_refs = Vec::new();
     let mut doc_refs = Vec::new();

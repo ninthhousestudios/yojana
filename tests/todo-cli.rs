@@ -38,7 +38,11 @@ fn todo_creates_needs_triage_task_and_prints_slug() {
         .env("YOJANA_DB_PATH", &db_path)
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout.trim(), "demo/1");
 
@@ -64,7 +68,11 @@ fn todo_with_message_flag_populates_description() {
         .env("YOJANA_DB_PATH", &db_path)
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "demo2/1");
 
     let db = seed(&db_path);
@@ -90,9 +98,18 @@ fn todo_reads_stdin_when_no_message_and_piped() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"piped body\n").unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"piped body\n")
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let db = seed(&db_path);
     let task = db.get_task("demo3/1").unwrap().unwrap();
@@ -126,7 +143,8 @@ fn todo_works_with_nested_project_slug() {
     {
         let db = seed(&db_path);
         let parent = db.create_project("demo4", "Demo4", "", None).unwrap();
-        db.create_project("demo4/sub", "Sub", "", Some(parent.id)).unwrap();
+        db.create_project("demo4/sub", "Sub", "", Some(parent.id))
+            .unwrap();
     }
 
     let out = cli()
@@ -134,7 +152,11 @@ fn todo_works_with_nested_project_slug() {
         .env("YOJANA_DB_PATH", &db_path)
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "demo4/sub/1");
 
     let _ = std::fs::remove_file(&db_path);

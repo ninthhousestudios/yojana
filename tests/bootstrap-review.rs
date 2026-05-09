@@ -1,9 +1,22 @@
 use yojana::context;
 use yojana::db::{CreateTaskParams, Db, TaskUpdates};
 
-fn make_task(db: &Db, project_id: uuid::Uuid, title: &str, desc: &str, commits: &[&str], deps: &[&str]) -> yojana::db::TaskRow {
-    let ac: Vec<serde_json::Value> = deps.iter().map(|d| serde_json::json!({"text": format!("depends on {d}"), "done": false})).collect();
-    let refs: Vec<serde_json::Value> = commits.iter().map(|c| serde_json::json!({"type": "git:commit", "value": c})).collect();
+fn make_task(
+    db: &Db,
+    project_id: uuid::Uuid,
+    title: &str,
+    desc: &str,
+    commits: &[&str],
+    deps: &[&str],
+) -> yojana::db::TaskRow {
+    let ac: Vec<serde_json::Value> = deps
+        .iter()
+        .map(|d| serde_json::json!({"text": format!("depends on {d}"), "done": false}))
+        .collect();
+    let refs: Vec<serde_json::Value> = commits
+        .iter()
+        .map(|c| serde_json::json!({"type": "git:commit", "value": c}))
+        .collect();
 
     db.create_task(CreateTaskParams {
         project_id,
@@ -22,17 +35,27 @@ fn make_task(db: &Db, project_id: uuid::Uuid, title: &str, desc: &str, commits: 
         execution_record: None,
         reproduction: None,
         root_cause: None,
-    }).unwrap()
+    })
+    .unwrap()
 }
 
 #[test]
 fn bootstrap_v0_review() {
     let db = Db::open_in_memory().unwrap();
-    let project = db.create_project("yojana", "Yojana task graph server", "Local-first task graph for the manas ecosystem", None).unwrap();
+    let project = db
+        .create_project(
+            "yojana",
+            "Yojana task graph server",
+            "Local-first task graph for the manas ecosystem",
+            None,
+        )
+        .unwrap();
     let pid = project.id;
 
     // Slices 01-02: project + task CRUD
-    let s01 = make_task(&db, pid,
+    let s01 = make_task(
+        &db,
+        pid,
         "Slices 01-02: Project + Task CRUD with MCP server",
         "HTTP/stdio MCP server with SQLite storage. Project CRUD with slug uniqueness, status, history. Task CRUD with per-project sequence numbers, JSON columns, context_refs validation, partial updates.",
         &["2ec4b69"],
@@ -40,7 +63,9 @@ fn bootstrap_v0_review() {
     );
 
     // Slice 03-04: state machine + edges
-    let s03 = make_task(&db, pid,
+    let s03 = make_task(
+        &db,
+        pid,
         "Slices 03-04: State machine + edges with cycle detection",
         "Pure state machine module validating triage label transitions. Edge CRUD with 5 typed relationships. DFS cycle detection on depends_on edges.",
         &["bd03edd"],
@@ -48,7 +73,9 @@ fn bootstrap_v0_review() {
     );
 
     // Slice 05: query + ready
-    let s05 = make_task(&db, pid,
+    let s05 = make_task(
+        &db,
+        pid,
         "Slice 05: Query filtering and ready detection",
         "yojana_query with project/status/category/slice_type/tag filters. yojana_ready shortcut. Graph-based ready/blocked computation from dependency edges.",
         &["64dee68"],
@@ -56,7 +83,9 @@ fn bootstrap_v0_review() {
     );
 
     // Slice 06: context shapes
-    let s06 = make_task(&db, pid,
+    let s06 = make_task(
+        &db,
+        pid,
         "Slice 06: Context shapes (summary + working) and conversations",
         "Pure context assembler module. Summary shape: title, status, edge counts, last history. Working shape: AC, decisions, 1-hop neighbors, conversation messages, context_refs. task_conversations table. Comment action on yojana_task.",
         &["7c9671b"],
@@ -64,7 +93,9 @@ fn bootstrap_v0_review() {
     );
 
     // Slice 07: e2e test
-    let s07 = make_task(&db, pid,
+    let s07 = make_task(
+        &db,
+        pid,
         "Slice 07: End-to-end integration test",
         "Full-flow test: project → tasks → edges → ready detection → state transitions → context shapes → conversations → query filtering. 12-step validation of v0 stack.",
         &["e796b8e"],
@@ -72,7 +103,9 @@ fn bootstrap_v0_review() {
     );
 
     // Slice 08: mp-skills adapter
-    let s08 = make_task(&db, pid,
+    let s08 = make_task(
+        &db,
+        pid,
         "Slice 08: mp-skills issue tracker adapter",
         "Documentation mapping mp-skills operations to yojana MCP tool calls. Spike/experiment conventions. Updated issue-tracker.md to reference yojana as active backend.",
         &["d5bfee0"],
@@ -89,9 +122,30 @@ fn bootstrap_v0_review() {
     // Mark all done
     for task in [&s01, &s03, &s05, &s06, &s07, &s08] {
         let id = task.id.to_string();
-        db.update_task(&id, TaskUpdates { status: Some("ready-for-agent".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("in-progress".into()), ..Default::default() }).unwrap();
-        db.update_task(&id, TaskUpdates { status: Some("done".into()), ..Default::default() }).unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("ready-for-agent".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("in-progress".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.update_task(
+            &id,
+            TaskUpdates {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
 
     // Fetch review context for each slice and verify structure
@@ -111,7 +165,11 @@ fn bootstrap_v0_review() {
         let bundle = context::review(&task, &neighbors_with_edges);
         assert_eq!(bundle.shape, "review");
         assert_eq!(bundle.status, "done");
-        assert!(!bundle.git_refs.is_empty(), "task {} should have git refs", bundle.human_id);
+        assert!(
+            !bundle.git_refs.is_empty(),
+            "task {} should have git refs",
+            bundle.human_id
+        );
         assert!(!bundle.description.is_empty());
     }
 

@@ -168,12 +168,9 @@ fn validate_slice_type(st: &str) -> Result<(), YojanaError> {
 
 fn validate_context_refs(refs: &[serde_json::Value]) -> Result<(), YojanaError> {
     for r in refs {
-        let ref_type = r
-            .get("type")
-            .and_then(|t| t.as_str())
-            .ok_or_else(|| {
-                YojanaError::InvalidInput("context_ref must have a 'type' string".into())
-            })?;
+        let ref_type = r.get("type").and_then(|t| t.as_str()).ok_or_else(|| {
+            YojanaError::InvalidInput("context_ref must have a 'type' string".into())
+        })?;
         if !VALID_REF_TYPES.contains(&ref_type) {
             return Err(YojanaError::InvalidInput(format!(
                 "unknown context_ref type '{ref_type}'; valid: {}",
@@ -296,10 +293,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 status: args.status,
                 force_status: false,
                 slice_type: args.slice_type,
-                acceptance_criteria: args
-                    .acceptance_criteria
-                    .map(|v| to_json(&v))
-                    .transpose()?,
+                acceptance_criteria: args.acceptance_criteria.map(|v| to_json(&v)).transpose()?,
                 decisions: args.decisions.map(|v| to_json(&v)).transpose()?,
                 implementation_plan: args.implementation_plan,
                 execution_record: args.execution_record,
@@ -324,8 +318,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let task = db
                 .get_task(id)?
                 .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
-            let message =
-                db.append_conversation_message(&task.id, text, args.author.as_deref())?;
+            let message = db.append_conversation_message(&task.id, text, args.author.as_deref())?;
             Ok(serde_json::json!({
                 "task": format!("{}/{}", task.project_slug, task.sequence_number),
                 "message": message,

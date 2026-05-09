@@ -134,13 +134,11 @@ fn validate_status(status: &str) -> Result<(), YojanaError> {
 
 fn resolve_parent_id(db: &Db, slug: &str) -> Result<Option<Uuid>, YojanaError> {
     if let Some((parent_slug, _)) = slug.rsplit_once('/') {
-        let parent = db
-            .get_project(None, Some(parent_slug))?
-            .ok_or_else(|| {
-                YojanaError::InvalidInput(format!(
-                    "parent project '{parent_slug}' does not exist; create it first"
-                ))
-            })?;
+        let parent = db.get_project(None, Some(parent_slug))?.ok_or_else(|| {
+            YojanaError::InvalidInput(format!(
+                "parent project '{parent_slug}' does not exist; create it first"
+            ))
+        })?;
         Ok(Some(parent.id))
     } else {
         Ok(None)
@@ -202,9 +200,9 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
             if let Some(ref status) = args.status {
                 validate_status(status)?;
             }
-            let handoff = args.handoff.map(|h| {
-                if h.is_empty() { None } else { Some(h) }
-            });
+            let handoff = args
+                .handoff
+                .map(|h| if h.is_empty() { None } else { Some(h) });
             let row = db.update_project(
                 args.id.as_deref(),
                 args.slug.as_deref(),

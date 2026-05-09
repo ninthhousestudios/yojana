@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{CreateTaskParams, Db, TaskQueryFilter, TaskUpdates, TERMINAL_STATUSES};
+use yojana::db::{CreateTaskParams, Db, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates};
 use yojana::display::{self, EdgeDirection, EdgeDisplay, format_dependency_tree};
 use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
@@ -223,7 +223,12 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::ProjectCreate { slug, title, description, parent } => {
+        Command::ProjectCreate {
+            slug,
+            title,
+            description,
+            parent,
+        } => {
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
             let parent_id = match parent {
@@ -235,13 +240,26 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => None,
             };
-            let project = db.create_project(&slug, &title, description.as_deref().unwrap_or(""), parent_id)?;
+            let project = db.create_project(
+                &slug,
+                &title,
+                description.as_deref().unwrap_or(""),
+                parent_id,
+            )?;
             println!("{}", project.slug);
             Ok(())
         }
-        Command::TaskEdit { id, title, description, status, category } => {
+        Command::TaskEdit {
+            id,
+            title,
+            description,
+            status,
+            category,
+        } => {
             if title.is_none() && description.is_none() && status.is_none() && category.is_none() {
-                anyhow::bail!("nothing to update — pass at least one of --title, -m/--message, --status, --category");
+                anyhow::bail!(
+                    "nothing to update — pass at least one of --title, -m/--message, --status, --category"
+                );
             }
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
@@ -258,7 +276,11 @@ async fn main() -> anyhow::Result<()> {
             println!("{} updated", human_id);
             Ok(())
         }
-        Command::Todo { project, title, message } => {
+        Command::Todo {
+            project,
+            title,
+            message,
+        } => {
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
             let proj = db
@@ -329,7 +351,10 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or(false)
                 });
             }
-            print!("{}", format_dependency_tree(&forest, &standalone, &task_map));
+            print!(
+                "{}",
+                format_dependency_tree(&forest, &standalone, &task_map)
+            );
             Ok(())
         }
         Command::Done { id, commit } => {
@@ -425,7 +450,10 @@ async fn serve_http() -> anyhow::Result<()> {
     #[allow(deprecated)]
     let app = axum::Router::new()
         .route("/mcp", any_service(mcp_service))
-        .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok"})) }));
+        .route(
+            "/health",
+            get(|| async { axum::Json(serde_json::json!({"status": "ok"})) }),
+        );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -449,7 +477,11 @@ fn tree_all_stale(
         .get(&node.task_id)
         .map(|t| is_stale_terminal(t, cutoff))
         .unwrap_or(true);
-    self_stale && node.children.iter().all(|c| tree_all_stale(c, tasks, cutoff))
+    self_stale
+        && node
+            .children
+            .iter()
+            .all(|c| tree_all_stale(c, tasks, cutoff))
 }
 
 fn resolve_edges_for_display(

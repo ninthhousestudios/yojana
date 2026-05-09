@@ -102,7 +102,9 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
     let cutoff = if args.include_all_terminal || args.status.is_some() {
         None
     } else {
-        let window = args.recent_terminal_window_ms.unwrap_or(24 * 60 * 60 * 1000);
+        let window = args
+            .recent_terminal_window_ms
+            .unwrap_or(24 * 60 * 60 * 1000);
         Some(chrono::Utc::now().timestamp_millis() - window)
     };
 

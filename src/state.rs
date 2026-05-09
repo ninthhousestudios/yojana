@@ -25,14 +25,23 @@ pub fn validate_transition(from: &str, to: &str) -> Result<(), YojanaError> {
         )));
     }
     if !valid_status(to) {
-        return Err(YojanaError::InvalidInput(format!(
-            "unknown status '{to}'"
-        )));
+        return Err(YojanaError::InvalidInput(format!("unknown status '{to}'")));
     }
 
     let allowed: &[&str] = match from {
-        "needs-triage" => &["needs-info", "ready-for-agent", "ready-for-human", "in-progress", "wontfix"],
-        "needs-info" => &["needs-triage", "ready-for-agent", "ready-for-human", "wontfix"],
+        "needs-triage" => &[
+            "needs-info",
+            "ready-for-agent",
+            "ready-for-human",
+            "in-progress",
+            "wontfix",
+        ],
+        "needs-info" => &[
+            "needs-triage",
+            "ready-for-agent",
+            "ready-for-human",
+            "wontfix",
+        ],
         "ready-for-agent" => &["in-progress", "needs-triage", "ready-for-human"],
         "ready-for-human" => &["in-progress", "needs-triage", "ready-for-agent"],
         "in-progress" => &["done", "needs-triage", "wontfix"],

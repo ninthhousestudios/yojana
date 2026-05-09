@@ -16,7 +16,10 @@ impl Config {
     }
 
     pub fn pid_path(&self) -> PathBuf {
-        self.db_path.parent().unwrap_or(std::path::Path::new(".")).join("yojana.pid")
+        self.db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("yojana.pid")
     }
 }
 
