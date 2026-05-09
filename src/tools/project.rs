@@ -53,6 +53,19 @@ pub struct ProjectOutput {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProjectListItem {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub status: String,
+    pub parent_id: Option<String>,
+    pub has_handoff: bool,
+    pub child_count: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProjectChild {
     pub slug: String,
     pub title: String,
@@ -189,12 +202,11 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
                 })?;
                 Some(Some(parent_row.id))
             } else {
-                Some(None) // roots only by default
+                None // all projects by default (flat)
             };
             let parent_ref = parent_filter.as_ref().map(|o| o.as_ref());
-            let rows = db.list_projects(args.status.as_deref(), parent_ref, None, None)?;
-            let out: Vec<ProjectOutput> = rows.into_iter().map(ProjectOutput::from).collect();
-            Ok(serde_json::to_value(out)?)
+            let rows = db.list_projects_slim(args.status.as_deref(), parent_ref)?;
+            Ok(serde_json::to_value(rows)?)
         }
         "update" => {
             if let Some(ref status) = args.status {

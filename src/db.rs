@@ -515,6 +515,82 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn list_projects_slim(
+        &self,
+        status: Option<&str>,
+        parent_filter: Option<Option<&Uuid>>,
+    ) -> Result<Vec<crate::tools::project::ProjectListItem>, YojanaError> {
+        let conn = self.conn.lock();
+
+        let mut sql = String::from(
+            "SELECT p.id, p.slug, p.title, p.status, p.parent_id,              p.handoff IS NOT NULL AS has_handoff,              (SELECT COUNT(*) FROM projects c WHERE c.parent_id = p.id) AS child_count,              p.created_at, p.updated_at              FROM projects p",
+        );
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(status) = status {
+            params.push(Box::new(status.to_string()));
+            conditions.push(format!("p.status = ?{}", params.len()));
+        }
+
+        match parent_filter {
+            Some(None) => {
+                conditions.push("p.parent_id IS NULL".to_string());
+            }
+            Some(Some(pid)) => {
+                params.push(Box::new(pid.as_bytes().to_vec()));
+                conditions.push(format!("p.parent_id = ?{}", params.len()));
+            }
+            None => {}
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY p.slug");
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let id_bytes: Vec<u8> = row.get(0)?;
+                let id = Uuid::from_slice(&id_bytes).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+                let parent_bytes: Option<Vec<u8>> = row.get(4)?;
+                let parent_id = parent_bytes
+                    .map(|bytes| {
+                        Uuid::from_slice(&bytes).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Blob,
+                                Box::new(e),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(crate::tools::project::ProjectListItem {
+                    id: id.to_string(),
+                    slug: row.get(1)?,
+                    title: row.get(2)?,
+                    status: row.get(3)?,
+                    parent_id: parent_id.map(|id| id.to_string()),
+                    has_handoff: row.get(5)?,
+                    child_count: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn list_descendant_project_ids(&self, root_id: &Uuid) -> Result<Vec<Uuid>, YojanaError> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
