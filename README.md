@@ -1,6 +1,14 @@
 # yojana
 
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+
 Local task graph for the manas ecosystem. SQLite-backed, exposed as an MCP server and a CLI. Tracks projects, tasks, dependencies, and contextual references for agent and human workflows.
+
+## TODO
+
+We are soon going to be implementing another tracking layer on top of what currently
+exists for the purpose of lifecycle tracking. See docs/task-lifecycle-arcs.md for the
+problem information and basic sketch.
 
 ## Install
 
@@ -110,6 +118,20 @@ All tools live under `mcp__yojana__*`. Highlights:
 
 ## Status model
 
+Valid statuses:
+
+| Status | Meaning |
+|---|---|
+| `needs-triage` | Default on creation. Not yet sorted — scope unclear, priority undecided, or just freshly captured. |
+| `needs-info` | Triaged, but blocked on information from a human (a question, a clarification, a decision). |
+| `ready-for-agent` | Triaged and ready to be picked up by an agent (AFK). Acceptance criteria are concrete enough to execute against. |
+| `ready-for-human` | Triaged and ready, but requires human attention (HITL — design decision, grilling, review). |
+| `in-progress` | Actively being worked on. Cap yourself at a small number of these at a time. |
+| `done` | Finished. `completed_at` is recorded. |
+| `wontfix` | Closed without doing the work. Decision should be in `decisions` or a comment. |
+
+Transitions:
+
 ```
 needs-triage ──► needs-info
              ──► ready-for-agent ──► in-progress ──► done
@@ -118,7 +140,11 @@ needs-triage ──► needs-info
              ──► wontfix
 ```
 
-Terminal states (`done`, `wontfix`) reset to `needs-triage` if reopened. Transitioning into `done` records `completed_at`; transitioning out clears it.
+`needs-info`, `ready-for-agent`, and `ready-for-human` can also transition back to `needs-triage` if scope shifts. Terminal states (`done`, `wontfix`) reset to `needs-triage` if reopened. Transitioning into `done` records `completed_at`; transitioning out clears it.
+
+**Discipline note:** when you create tasks out of an explicit triage process (a review, a decompose, a planning session), set the status accurately on creation rather than letting `needs-triage` default. `needs-triage` means *untriaged*, not *just created*.
+
+The MCP path enforces these transitions; the CLI (`yojana task-edit --status`) bypasses the state machine for ad-hoc fixups.
 
 ## Storage
 
