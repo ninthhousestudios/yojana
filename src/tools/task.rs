@@ -359,6 +359,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             } else {
                 args.context_refs
             };
+            let had_status_change = args.status.is_some();
             let updates = TaskUpdates {
                 title: args.title,
                 description: args.description,
@@ -379,7 +380,9 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 arc_phase: arc_phase_update,
             };
             let row = db.update_task(id, updates)?;
-            db.try_auto_advance_phase(&row.id)?;
+            if had_status_change {
+                db.try_auto_advance_phase(&row.id)?;
+            }
             Ok(serde_json::to_value(TaskOutput::from(row))?)
         }
         "comment" => {

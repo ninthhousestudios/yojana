@@ -55,21 +55,24 @@ pub fn handle(db: &Db, args: ContextArgs) -> Result<serde_json::Value, YojanaErr
         "working" => {
             let neighbors_with_edges = load_neighbors(db, task.id, &edges)?;
             let messages = db.get_conversation_messages(&task.id)?;
-            let arc_info = build_arc_info(db, &task)?;
+            let arc_ctx = load_arc_context(db, &task)?;
             let bundle = context::working(
                 &task,
                 &neighbors_with_edges,
                 &messages,
                 DEFAULT_MAX_MESSAGES,
-                arc_info,
+                arc_ctx.as_ref().map(|c| c.info.clone()),
             );
             Ok(serde_json::to_value(bundle)?)
         }
         "planning" => {
             let neighbors_with_edges = load_neighbors(db, task.id, &edges)?;
             let messages = db.get_conversation_messages(&task.id)?;
-            let arc_info = build_arc_info(db, &task)?;
-            let prior_tasks = load_prior_phase_tasks(db, &task)?;
+            let arc_ctx = load_arc_context(db, &task)?;
+            let (arc_info, prior_tasks) = match arc_ctx {
+                Some(c) => (Some(c.info), c.prior_phase_tasks),
+                None => (None, Vec::new()),
+            };
             let bundle = context::planning(
                 &task,
                 &neighbors_with_edges,
@@ -81,8 +84,11 @@ pub fn handle(db: &Db, args: ContextArgs) -> Result<serde_json::Value, YojanaErr
             Ok(serde_json::to_value(bundle)?)
         }
         "agent" => {
-            let arc_info = build_arc_info(db, &task)?;
-            let prior_tasks = load_prior_phase_tasks(db, &task)?;
+            let arc_ctx = load_arc_context(db, &task)?;
+            let (arc_info, prior_tasks) = match arc_ctx {
+                Some(c) => (Some(c.info), c.prior_phase_tasks),
+                None => (None, Vec::new()),
+            };
             let bundle = context::agent(&task, arc_info, &prior_tasks);
             Ok(serde_json::to_value(bundle)?)
         }
@@ -101,7 +107,7 @@ fn handle_arc_summary(db: &Db, arc_id: &str) -> Result<serde_json::Value, Yojana
         .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
 
     let human_id = format!("{}/~{}", arc.project_slug, arc.sequence_number);
-    let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap_or_default();
+    let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
 
     let arc_tasks = db.list_tasks(&TaskQueryFilter {
         arc_id: Some(arc.id),
@@ -145,10 +151,15 @@ fn handle_arc_summary(db: &Db, arc_id: &str) -> Result<serde_json::Value, Yojana
     Ok(serde_json::to_value(bundle)?)
 }
 
-fn build_arc_info(
+struct ArcContext {
+    info: context::ArcInfo,
+    prior_phase_tasks: Vec<crate::db::TaskRow>,
+}
+
+fn load_arc_context(
     db: &Db,
     task: &crate::db::TaskRow,
-) -> Result<Option<context::ArcInfo>, YojanaError> {
+) -> Result<Option<ArcContext>, YojanaError> {
     let (arc_id, arc_phase) = match (&task.arc_id, &task.arc_phase) {
         (Some(id), Some(phase)) => (id, phase),
         _ => return Ok(None),
@@ -158,52 +169,32 @@ fn build_arc_info(
         .get_arc(&arc_id.to_string())?
         .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
 
-    let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap_or_default();
+    let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
     let total = phases.len();
     let position = phases
         .iter()
         .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(arc_phase))
-        .map(|i| i + 1)
-        .unwrap_or(0);
+        .ok_or_else(|| {
+            YojanaError::InvalidInput(format!(
+                "task references phase '{arc_phase}' not found in arc '{arc_id}'"
+            ))
+        })?
+        + 1;
 
-    Ok(Some(context::ArcInfo {
-        arc_title: arc.title,
-        current_phase: arc_phase.clone(),
-        phase_position: format!("phase {position} of {total}"),
-    }))
-}
-
-fn load_prior_phase_tasks(
-    db: &Db,
-    task: &crate::db::TaskRow,
-) -> Result<Vec<crate::db::TaskRow>, YojanaError> {
-    let (arc_id, arc_phase) = match (&task.arc_id, &task.arc_phase) {
-        (Some(id), Some(phase)) => (id, phase),
-        _ => return Ok(Vec::new()),
-    };
-
-    let arc = db
-        .get_arc(&arc_id.to_string())?
-        .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
-
-    let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap_or_default();
     let prior_phase_names: Vec<&str> = phases
         .iter()
         .take_while(|p| p.get("name").and_then(|n| n.as_str()) != Some(arc_phase))
         .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
         .collect();
 
-    if prior_phase_names.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let all_arc_tasks = db.list_tasks(&TaskQueryFilter {
-        arc_id: Some(*arc_id),
-        limit: Some(500),
-        ..Default::default()
-    })?;
-
-    let prior_tasks: Vec<crate::db::TaskRow> = all_arc_tasks
+    let prior_phase_tasks = if prior_phase_names.is_empty() {
+        Vec::new()
+    } else {
+        db.list_tasks(&TaskQueryFilter {
+            arc_id: Some(*arc_id),
+            limit: Some(500),
+            ..Default::default()
+        })?
         .into_iter()
         .filter(|t| {
             t.arc_phase
@@ -211,9 +202,17 @@ fn load_prior_phase_tasks(
                 .map(|p| prior_phase_names.contains(&p))
                 .unwrap_or(false)
         })
-        .collect();
+        .collect()
+    };
 
-    Ok(prior_tasks)
+    Ok(Some(ArcContext {
+        info: context::ArcInfo {
+            arc_title: arc.title,
+            current_phase: arc_phase.clone(),
+            phase_position: format!("phase {position} of {total}"),
+        },
+        prior_phase_tasks,
+    }))
 }
 
 fn load_neighbors(

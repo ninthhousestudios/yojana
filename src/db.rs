@@ -1475,6 +1475,10 @@ impl Db {
         let arc = get_arc_by_uuid(&conn, &arc_id)?
             .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
 
+        if arc.status != "active" {
+            return Ok(false);
+        }
+
         let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
         let phase_idx = match phases
             .iter()

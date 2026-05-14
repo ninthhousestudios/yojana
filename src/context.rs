@@ -137,6 +137,26 @@ pub struct PlanningBundle {
     pub prior_phase_execution_records: Vec<serde_json::Value>,
 }
 
+fn extract_prior_phase_context(
+    tasks: &[TaskRow],
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let mut decisions = Vec::new();
+    let mut records = Vec::new();
+    for t in tasks {
+        for d in json_array(&t.decisions) {
+            decisions.push(d);
+        }
+        if let Some(ref record) = t.execution_record {
+            records.push(serde_json::json!({
+                "task": human_id(t),
+                "phase": t.arc_phase.as_deref().unwrap_or(""),
+                "record": record,
+            }));
+        }
+    }
+    (decisions, records)
+}
+
 pub fn planning(
     task: &TaskRow,
     neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)],
@@ -156,20 +176,7 @@ pub fn planning(
         messages.to_vec()
     };
 
-    let mut prior_decisions = Vec::new();
-    let mut prior_records = Vec::new();
-    for t in prior_phase_tasks {
-        for d in json_array(&t.decisions) {
-            prior_decisions.push(d);
-        }
-        if let Some(ref record) = t.execution_record {
-            prior_records.push(serde_json::json!({
-                "task": human_id(t),
-                "phase": t.arc_phase.as_deref().unwrap_or(""),
-                "record": record,
-            }));
-        }
-    }
+    let (prior_decisions, prior_records) = extract_prior_phase_context(prior_phase_tasks);
 
     PlanningBundle {
         shape: "planning",
@@ -204,20 +211,7 @@ pub fn agent(
     arc_info: Option<ArcInfo>,
     prior_phase_tasks: &[TaskRow],
 ) -> AgentBundle {
-    let mut prior_decisions = Vec::new();
-    let mut prior_records = Vec::new();
-    for t in prior_phase_tasks {
-        for d in json_array(&t.decisions) {
-            prior_decisions.push(d);
-        }
-        if let Some(ref record) = t.execution_record {
-            prior_records.push(serde_json::json!({
-                "task": human_id(t),
-                "phase": t.arc_phase.as_deref().unwrap_or(""),
-                "record": record,
-            }));
-        }
-    }
+    let (prior_decisions, prior_records) = extract_prior_phase_context(prior_phase_tasks);
 
     AgentBundle {
         shape: "agent",
