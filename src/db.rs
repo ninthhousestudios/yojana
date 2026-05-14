@@ -1313,6 +1313,136 @@ impl Db {
         Ok((arc.id, arc.project_id))
     }
 
+    pub fn advance_arc_phase(
+        &self,
+        identifier: &str,
+        phase_name: Option<&str>,
+        skip: bool,
+        note: Option<String>,
+    ) -> Result<ArcRow, YojanaError> {
+        let conn = self.conn.lock();
+        let arc = resolve_arc(&conn, identifier)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
+        let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
+
+        let target_idx = if let Some(name) = phase_name {
+            phases
+                .iter()
+                .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(name))
+                .ok_or_else(|| YojanaError::InvalidInput(format!("unknown phase '{name}'")))?
+        } else {
+            phases
+                .iter()
+                .position(|p| p.get("status").and_then(|s| s.as_str()) == Some("active"))
+                .ok_or_else(|| YojanaError::InvalidInput("no active phase to advance".into()))?
+        };
+
+        let target_status = phases[target_idx]
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending");
+        if target_status != "active" {
+            return Err(YojanaError::InvalidInput(format!(
+                "cannot advance phase '{}': status is '{}', expected 'active'",
+                phases[target_idx]["name"].as_str().unwrap_or("?"),
+                target_status
+            )));
+        }
+
+        let new_status = if skip { "skipped" } else { "completed" };
+        phases[target_idx]["status"] = serde_json::Value::String(new_status.into());
+
+        if let Some(next) = phases[target_idx + 1..]
+            .iter_mut()
+            .find(|p| p.get("status").and_then(|s| s.as_str()) == Some("pending"))
+        {
+            next["status"] = serde_json::Value::String("active".into());
+        }
+
+        let phase_name_str = phases[target_idx]["name"]
+            .as_str()
+            .unwrap_or("?")
+            .to_string();
+        let mut payload = serde_json::json!({
+            "phase": phase_name_str,
+            "from": "active",
+            "to": new_status,
+        });
+        if let Some(ref n) = note {
+            payload["note"] = serde_json::Value::String(n.clone());
+        }
+        history.push(HistoryEntry {
+            ts: now,
+            kind: "phase_advanced".into(),
+            payload,
+        });
+
+        let phases_json = serde_json::to_string(&phases)?;
+        let history_json = serde_json::to_string(&history)?;
+
+        conn.execute(
+            "UPDATE arcs SET phases=?1, history=?2, updated_at=?3 WHERE id=?4",
+            rusqlite::params![phases_json, history_json, now, arc.id.as_bytes().as_slice(),],
+        )?;
+
+        get_arc_by_uuid(&conn, &arc.id)?.ok_or_else(|| YojanaError::NotFound("advanced arc".into()))
+    }
+
+    pub fn revert_arc_phase(
+        &self,
+        identifier: &str,
+        phase_name: &str,
+        note: Option<String>,
+    ) -> Result<ArcRow, YojanaError> {
+        let conn = self.conn.lock();
+        let arc = resolve_arc(&conn, identifier)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
+        let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
+
+        let idx = phases
+            .iter()
+            .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(phase_name))
+            .ok_or_else(|| YojanaError::InvalidInput(format!("unknown phase '{phase_name}'")))?;
+
+        let current_status = phases[idx]
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending");
+        if current_status != "completed" {
+            return Err(YojanaError::InvalidInput(format!(
+                "cannot revert phase '{phase_name}': status is '{current_status}', expected 'completed'"
+            )));
+        }
+
+        phases[idx]["status"] = serde_json::Value::String("active".into());
+
+        let mut payload = serde_json::json!({
+            "phase": phase_name,
+            "from": "completed",
+            "to": "active",
+        });
+        if let Some(ref n) = note {
+            payload["note"] = serde_json::Value::String(n.clone());
+        }
+        history.push(HistoryEntry {
+            ts: now,
+            kind: "phase_reverted".into(),
+            payload,
+        });
+
+        let phases_json = serde_json::to_string(&phases)?;
+        let history_json = serde_json::to_string(&history)?;
+
+        conn.execute(
+            "UPDATE arcs SET phases=?1, history=?2, updated_at=?3 WHERE id=?4",
+            rusqlite::params![phases_json, history_json, now, arc.id.as_bytes().as_slice(),],
+        )?;
+
+        get_arc_by_uuid(&conn, &arc.id)?.ok_or_else(|| YojanaError::NotFound("reverted arc".into()))
+    }
+
     // --- Query methods ---
 
     pub fn list_tasks(&self, filter: &TaskQueryFilter) -> Result<Vec<TaskRow>, YojanaError> {

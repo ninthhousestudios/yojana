@@ -7,7 +7,7 @@ use crate::error::YojanaError;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ArcArgs {
-    /// Action: "create", "get", "update"
+    /// Action: "create", "get", "update", "advance", "revert"
     pub action: String,
     /// Arc UUID or "project-slug/~N" (for get/update)
     #[serde(default)]
@@ -29,6 +29,15 @@ pub struct ArcArgs {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub context_refs: Option<Vec<serde_json::Value>>,
+    /// Target phase name (for advance/revert)
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Optional note for phase transition history
+    #[serde(default)]
+    pub note: Option<String>,
+    /// If true, advance sets phase to "skipped" instead of "completed"
+    #[serde(default)]
+    pub skip: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,8 +150,29 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
             let row = db.update_arc(id, updates)?;
             Ok(serde_json::to_value(ArcOutput::from(row))?)
         }
+        "advance" => {
+            let id = args
+                .id
+                .as_deref()
+                .ok_or_else(|| YojanaError::InvalidInput("id required for advance".into()))?;
+            let skip = args.skip.unwrap_or(false);
+            let row = db.advance_arc_phase(id, args.phase.as_deref(), skip, args.note)?;
+            Ok(serde_json::to_value(ArcOutput::from(row))?)
+        }
+        "revert" => {
+            let id = args
+                .id
+                .as_deref()
+                .ok_or_else(|| YojanaError::InvalidInput("id required for revert".into()))?;
+            let phase = args
+                .phase
+                .as_deref()
+                .ok_or_else(|| YojanaError::InvalidInput("phase required for revert".into()))?;
+            let row = db.revert_arc_phase(id, phase, args.note)?;
+            Ok(serde_json::to_value(ArcOutput::from(row))?)
+        }
         other => Err(YojanaError::InvalidInput(format!(
-            "unknown action '{other}'; valid: create, get, update"
+            "unknown action '{other}'; valid: create, get, update, advance, revert"
         ))),
     }
 }
@@ -159,6 +189,16 @@ mod tests {
     }
 
     fn create_arc(db: &Db) -> serde_json::Value {
+        create_arc_with_phases(
+            db,
+            vec![
+                serde_json::json!({"name": "design", "slice_type": "HITL"}),
+                serde_json::json!({"name": "implement", "slice_type": "AFK"}),
+            ],
+        )
+    }
+
+    fn create_arc_with_phases(db: &Db, phases: Vec<serde_json::Value>) -> serde_json::Value {
         handle(
             db,
             ArcArgs {
@@ -168,15 +208,32 @@ mod tests {
                 title: Some("Test Arc".into()),
                 description: None,
                 status: None,
-                phases: Some(vec![
-                    serde_json::json!({"name": "design", "slice_type": "HITL"}),
-                    serde_json::json!({"name": "implement", "slice_type": "AFK"}),
-                ]),
+                phases: Some(phases),
                 tags: None,
                 context_refs: None,
+                phase: None,
+                note: None,
+                skip: None,
             },
         )
         .unwrap()
+    }
+
+    fn arc_args(action: &str, id: &str) -> ArcArgs {
+        ArcArgs {
+            action: action.into(),
+            id: Some(id.into()),
+            project: None,
+            title: None,
+            description: None,
+            status: None,
+            phases: None,
+            tags: None,
+            context_refs: None,
+            phase: None,
+            note: None,
+            skip: None,
+        }
     }
 
     #[test]
@@ -193,21 +250,7 @@ mod tests {
     fn arc_tool_get_by_sigil() {
         let db = test_db();
         create_arc(&db);
-        let out = handle(
-            &db,
-            ArcArgs {
-                action: "get".into(),
-                id: Some("proj/~1".into()),
-                project: None,
-                title: None,
-                description: None,
-                status: None,
-                phases: None,
-                tags: None,
-                context_refs: None,
-            },
-        )
-        .unwrap();
+        let out = handle(&db, arc_args("get", "proj/~1")).unwrap();
         assert_eq!(out["title"], "Test Arc");
     }
 
@@ -467,28 +510,13 @@ mod tests {
         let db = test_db();
         create_arc(&db);
 
-        let updated = handle(
-            &db,
-            ArcArgs {
-                action: "update".into(),
-                id: Some("proj/~1".into()),
-                project: None,
-                title: None,
-                description: Some("New description".into()),
-                status: None,
-                phases: None,
-                tags: None,
-                context_refs: None,
-            },
-        )
-        .unwrap();
+        let mut args = arc_args("update", "proj/~1");
+        args.description = Some("New description".into());
+        let updated = handle(&db, args).unwrap();
         let history = updated["history"].as_array().unwrap();
         let desc_entry = history
             .iter()
-            .find(|e| {
-                e["kind"] == "updated"
-                    && e["payload"]["field"] == "description"
-            });
+            .find(|e| e["kind"] == "updated" && e["payload"]["field"] == "description");
         assert!(desc_entry.is_some());
     }
 
@@ -497,27 +525,13 @@ mod tests {
         let db = test_db();
         create_arc(&db);
 
-        let updated = handle(
-            &db,
-            ArcArgs {
-                action: "update".into(),
-                id: Some("proj/~1".into()),
-                project: None,
-                title: None,
-                description: None,
-                status: None,
-                phases: None,
-                tags: Some(vec!["new-tag".into()]),
-                context_refs: None,
-            },
-        )
-        .unwrap();
+        let mut args = arc_args("update", "proj/~1");
+        args.tags = Some(vec!["new-tag".into()]);
+        let updated = handle(&db, args).unwrap();
         let history = updated["history"].as_array().unwrap();
         let tags_entry = history
             .iter()
-            .find(|e| {
-                e["kind"] == "updated" && e["payload"]["field"] == "tags"
-            });
+            .find(|e| e["kind"] == "updated" && e["payload"]["field"] == "tags");
         assert!(tags_entry.is_some());
     }
 
@@ -526,30 +540,15 @@ mod tests {
         let db = test_db();
         create_arc(&db);
 
-        let updated = handle(
-            &db,
-            ArcArgs {
-                action: "update".into(),
-                id: Some("proj/~1".into()),
-                project: None,
-                title: None,
-                description: None,
-                status: None,
-                phases: None,
-                tags: None,
-                context_refs: Some(vec![
-                    serde_json::json!({"type": "doc:path", "value": "foo.md"}),
-                ]),
-            },
-        )
-        .unwrap();
+        let mut args = arc_args("update", "proj/~1");
+        args.context_refs = Some(vec![
+            serde_json::json!({"type": "doc:path", "value": "foo.md"}),
+        ]);
+        let updated = handle(&db, args).unwrap();
         let history = updated["history"].as_array().unwrap();
         let refs_entry = history
             .iter()
-            .find(|e| {
-                e["kind"] == "updated"
-                    && e["payload"]["field"] == "context_refs"
-            });
+            .find(|e| e["kind"] == "updated" && e["payload"]["field"] == "context_refs");
         assert!(refs_entry.is_some());
     }
 
@@ -571,9 +570,176 @@ mod tests {
                 ]),
                 tags: None,
                 context_refs: None,
+                phase: None,
+                note: None,
+                skip: None,
             },
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid phase status"));
+    }
+
+    // --- Phase advance tests ---
+
+    #[test]
+    fn advance_completes_active_phase_and_activates_next() {
+        let db = test_db();
+        create_arc(&db);
+
+        let out = handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["name"], "design");
+        assert_eq!(phases[0]["status"], "completed");
+        assert_eq!(phases[1]["name"], "implement");
+        assert_eq!(phases[1]["status"], "active");
+    }
+
+    #[test]
+    fn advance_targets_specific_phase_by_name() {
+        let db = test_db();
+        create_arc_with_phases(
+            &db,
+            vec![
+                serde_json::json!({"name": "design", "status": "active"}),
+                serde_json::json!({"name": "implement", "status": "active"}),
+                serde_json::json!({"name": "review", "status": "pending"}),
+            ],
+        );
+
+        let mut args = arc_args("advance", "proj/~1");
+        args.phase = Some("implement".into());
+        let out = handle(&db, args).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["status"], "active");
+        assert_eq!(phases[1]["status"], "completed");
+        assert_eq!(phases[2]["status"], "active");
+    }
+
+    #[test]
+    fn advance_with_skip_sets_skipped() {
+        let db = test_db();
+        create_arc(&db);
+
+        let mut args = arc_args("advance", "proj/~1");
+        args.skip = Some(true);
+        let out = handle(&db, args).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["status"], "skipped");
+        assert_eq!(phases[1]["status"], "active");
+    }
+
+    #[test]
+    fn revert_sets_completed_phase_back_to_active() {
+        let db = test_db();
+        create_arc(&db);
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+
+        let mut args = arc_args("revert", "proj/~1");
+        args.phase = Some("design".into());
+        let out = handle(&db, args).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["status"], "active");
+        assert_eq!(phases[1]["status"], "active");
+    }
+
+    #[test]
+    fn revert_does_not_cascade() {
+        let db = test_db();
+        create_arc_with_phases(
+            &db,
+            vec![
+                serde_json::json!({"name": "design"}),
+                serde_json::json!({"name": "implement"}),
+                serde_json::json!({"name": "review"}),
+            ],
+        );
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+
+        let mut args = arc_args("revert", "proj/~1");
+        args.phase = Some("design".into());
+        let out = handle(&db, args).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["status"], "active");
+        assert_eq!(phases[1]["status"], "completed");
+        assert_eq!(phases[2]["status"], "active");
+    }
+
+    #[test]
+    fn phase_transitions_recorded_in_history_with_note() {
+        let db = test_db();
+        create_arc(&db);
+
+        let mut args = arc_args("advance", "proj/~1");
+        args.note = Some("design review passed".into());
+        let out = handle(&db, args).unwrap();
+        let history = out["history"].as_array().unwrap();
+        let entry = history
+            .iter()
+            .find(|e| e["kind"] == "phase_advanced")
+            .unwrap();
+        assert_eq!(entry["payload"]["phase"], "design");
+        assert_eq!(entry["payload"]["to"], "completed");
+        assert_eq!(entry["payload"]["note"], "design review passed");
+        assert!(entry["ts"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn advance_past_last_phase_does_not_error() {
+        let db = test_db();
+        create_arc_with_phases(&db, vec![serde_json::json!({"name": "only-phase"})]);
+
+        let out = handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        let phases = out["phases"].as_array().unwrap();
+        assert_eq!(phases[0]["status"], "completed");
+    }
+
+    #[test]
+    fn cannot_advance_completed_phase() {
+        let db = test_db();
+        create_arc(&db);
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+
+        let mut args = arc_args("advance", "proj/~1");
+        args.phase = Some("design".into());
+        let err = handle(&db, args).unwrap_err();
+        assert!(err.to_string().contains("cannot advance"));
+        assert!(err.to_string().contains("completed"));
+    }
+
+    #[test]
+    fn cannot_advance_skipped_phase() {
+        let db = test_db();
+        create_arc(&db);
+        let mut args = arc_args("advance", "proj/~1");
+        args.skip = Some(true);
+        handle(&db, args).unwrap();
+
+        let mut args = arc_args("advance", "proj/~1");
+        args.phase = Some("design".into());
+        let err = handle(&db, args).unwrap_err();
+        assert!(err.to_string().contains("cannot advance"));
+        assert!(err.to_string().contains("skipped"));
+    }
+
+    #[test]
+    fn cannot_revert_non_completed_phase() {
+        let db = test_db();
+        create_arc(&db);
+
+        let mut args = arc_args("revert", "proj/~1");
+        args.phase = Some("design".into());
+        let err = handle(&db, args).unwrap_err();
+        assert!(err.to_string().contains("cannot revert"));
+        assert!(err.to_string().contains("active"));
+    }
+
+    #[test]
+    fn revert_requires_phase_name() {
+        let db = test_db();
+        create_arc(&db);
+
+        let err = handle(&db, arc_args("revert", "proj/~1")).unwrap_err();
+        assert!(err.to_string().contains("phase required"));
     }
 }

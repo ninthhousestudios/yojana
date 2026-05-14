@@ -58,7 +58,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, get, or update arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending; returns project/~N identifier), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs)."
+        description = "Create, get, update, advance, or revert arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending; returns project/~N identifier), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs), advance (requires id; optional phase to target specific phase, skip=true to set skipped instead of completed, note for history), revert (requires id and phase; sets completed phase back to active, optional note for history)."
     )]
     pub async fn yojana_arc(
         &self,
