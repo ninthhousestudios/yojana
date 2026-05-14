@@ -4,32 +4,6 @@
 
 Local task graph for the manas ecosystem. SQLite-backed, exposed as an MCP server and a CLI. Tracks projects, tasks, dependencies, and contextual references for agent and human workflows.
 
-## Arcs
-
-Arcs are lifecycle containers for tasks. A feature, bugfix, or spike flows through ordered phases — each phase groups related tasks and gates dispatch. Arcs live within a single project; cross-project work is tracked via task edges (`motivated_by`, `depends_on`).
-
-**Key concepts:**
-
-- **Phases** are defined inline at creation time (yojana validates shape, not vocabulary). Each phase has a `name`, optional `slice_type` (AFK/HITL), optional `gate` (auto/manual), and a `status` (active/pending/completed/skipped).
-- The first phase defaults to `active`; the rest start `pending`. The current phase is derived (first non-completed, non-skipped phase).
-- **Auto-gated** phases advance automatically when all their tasks reach terminal status (`done`/`wontfix`). Empty phases do not auto-advance.
-- **Manual-gated** phases require explicit `advance` to proceed — useful as quality gates.
-- **Phase revert** sets a completed phase back to active without cascading.
-- **Arc status** (`active`/`paused`/`completed`/`abandoned`) is independent of phase progress. Pausing an arc stops all dispatch of its tasks without touching individual task statuses.
-- `yojana_ready` only returns tasks whose arc phase is `active` and whose arc is `active`. Tasks not in any arc behave as before.
-- `yojana_context` for a task includes its arc position and prior-phase decisions. Arcs also have a `summary` context shape.
-
-**Identifiers:** arcs use a `~` sigil — `project/~N` (e.g. `yojana/~3`) to distinguish from task IDs.
-
-**Example phase sets:**
-
-| Arc type | Phases |
-|---|---|
-| Feature | design, decompose, implement, review, verify |
-| Bugfix | diagnose, fix, verify |
-| Spike | explore, synthesize, decide |
-
-See `docs/task-lifecycle-arcs.md` for the full design doc.
 
 ## Install
 
@@ -167,6 +141,33 @@ needs-triage ──► needs-info
 **Discipline note:** when you create tasks out of an explicit triage process (a review, a decompose, a planning session), set the status accurately on creation rather than letting `needs-triage` default. `needs-triage` means *untriaged*, not *just created*.
 
 The MCP path enforces these transitions; the CLI (`yojana task-edit --status`) bypasses the state machine for ad-hoc fixups.
+
+## Arcs
+
+Arcs are lifecycle containers for tasks. A feature, bugfix, or spike flows through ordered phases — each phase groups related tasks and gates dispatch. Arcs live within a single project; cross-project work is tracked via task edges (`motivated_by`, `depends_on`).
+
+**Key concepts:**
+
+- **Phases** are defined inline at creation time (yojana validates shape, not vocabulary). Each phase has a `name`, optional `slice_type` (AFK/HITL), optional `gate` (auto/manual), and a `status` (active/pending/completed/skipped).
+- The first phase defaults to `active`; the rest start `pending`. The current phase is derived (first non-completed, non-skipped phase).
+- **Auto-gated** phases advance automatically when all their tasks reach terminal status (`done`/`wontfix`). Empty phases do not auto-advance.
+- **Manual-gated** phases require explicit `advance` to proceed — useful as quality gates.
+- **Phase revert** sets a completed phase back to active without cascading.
+- **Arc status** (`active`/`paused`/`completed`/`abandoned`) is independent of phase progress. Pausing an arc stops all dispatch of its tasks without touching individual task statuses.
+- `yojana_ready` only returns tasks whose arc phase is `active` and whose arc is `active`. Tasks not in any arc behave as before.
+- `yojana_context` for a task includes its arc position and prior-phase decisions. Arcs also have a `summary` context shape.
+
+**Identifiers:** arcs use a `~` sigil — `project/~N` (e.g. `yojana/~3`) to distinguish from task IDs.
+
+**Example phase sets:**
+
+| Arc type | Phases |
+|---|---|
+| Feature | design, decompose, implement, review, verify |
+| Bugfix | diagnose, fix, verify |
+| Spike | explore, synthesize, decide |
+
+
 
 ## Storage
 
