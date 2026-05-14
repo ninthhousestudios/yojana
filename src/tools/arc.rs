@@ -146,3 +146,213 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::task;
+
+    fn test_db() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
+        db
+    }
+
+    fn create_arc(db: &Db) -> serde_json::Value {
+        handle(
+            db,
+            ArcArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Test Arc".into()),
+                description: None,
+                status: None,
+                phases: Some(vec![
+                    serde_json::json!({"name": "design", "slice_type": "HITL"}),
+                    serde_json::json!({"name": "implement", "slice_type": "AFK"}),
+                ]),
+                tags: None,
+                context_refs: None,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn arc_tool_create_returns_human_id() {
+        let db = test_db();
+        let out = create_arc(&db);
+        assert_eq!(out["human_id"], "proj/~1");
+        assert_eq!(out["status"], "active");
+        assert_eq!(out["phases"][0]["status"], "active");
+        assert_eq!(out["phases"][1]["status"], "pending");
+    }
+
+    #[test]
+    fn arc_tool_get_by_sigil() {
+        let db = test_db();
+        create_arc(&db);
+        let out = handle(
+            &db,
+            ArcArgs {
+                action: "get".into(),
+                id: Some("proj/~1".into()),
+                project: None,
+                title: None,
+                description: None,
+                status: None,
+                phases: None,
+                tags: None,
+                context_refs: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(out["title"], "Test Arc");
+    }
+
+    #[test]
+    fn task_rejects_arc_phase_without_arc_id() {
+        let db = test_db();
+        let err = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Bad task".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: None,
+                arc_phase: Some("design".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("arc_id required"));
+    }
+
+    #[test]
+    fn task_rejects_arc_id_without_arc_phase() {
+        let db = test_db();
+        let arc = create_arc(&db);
+        let arc_id = arc["id"].as_str().unwrap();
+
+        let err = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Bad task".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: Some(arc_id.into()),
+                arc_phase: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("arc_phase required"));
+    }
+
+    #[test]
+    fn task_rejects_invalid_phase_name() {
+        let db = test_db();
+        let arc = create_arc(&db);
+        let arc_id = arc["id"].as_str().unwrap();
+
+        let err = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Bad task".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: Some(arc_id.into()),
+                arc_phase: Some("nonexistent".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown phase"));
+    }
+
+    #[test]
+    fn task_create_with_valid_arc_assignment() {
+        let db = test_db();
+        let arc = create_arc(&db);
+
+        let task = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Design doc".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: Some("proj/~1".into()),
+                arc_phase: Some("design".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(task["arc_id"], arc["id"]);
+        assert_eq!(task["arc_phase"], "design");
+    }
+}
