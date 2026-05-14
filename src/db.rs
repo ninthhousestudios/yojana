@@ -1141,6 +1141,11 @@ impl Db {
     // --- Arc methods ---
 
     pub fn create_arc(&self, params: CreateArcParams) -> Result<ArcRow, YojanaError> {
+        let input_phases: Vec<serde_json::Value> = serde_json::from_str(&params.phases)?;
+        validate_phases(&input_phases)?;
+        let phases_with_defaults = apply_phase_defaults(&input_phases);
+        let phases_json = serde_json::to_string(&phases_with_defaults)?;
+
         let conn = self.conn.lock();
         let id = Uuid::now_v7();
         let now = chrono::Utc::now().timestamp_millis();
@@ -1168,7 +1173,7 @@ impl Db {
                 params.title,
                 params.description,
                 "active",
-                params.phases,
+                phases_json,
                 params.tags,
                 params.context_refs,
                 history,
@@ -1198,6 +1203,15 @@ impl Db {
         let now = chrono::Utc::now().timestamp_millis();
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
 
+        if let Some(ref new_title) = updates.title {
+            if new_title != &arc.title {
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "updated".into(),
+                    payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
+                });
+            }
+        }
         if let Some(ref new_status) = updates.status {
             if new_status != &arc.status {
                 if !VALID_ARC_STATUSES.contains(&new_status.as_str()) {
@@ -1210,15 +1224,6 @@ impl Db {
                     ts: now,
                     kind: "status_changed".into(),
                     payload: serde_json::json!({"from": arc.status, "to": new_status}),
-                });
-            }
-        }
-        if let Some(ref new_title) = updates.title {
-            if new_title != &arc.title {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
                 });
             }
         }
@@ -3009,5 +3014,347 @@ mod tests {
         let handoffs = db.get_handoffs(&ids).unwrap();
         assert_eq!(handoffs.len(), 1);
         assert_eq!(handoffs[0].0, "parent/child");
+    }
+
+    // --- Arc tests ---
+
+    #[test]
+    fn create_arc_and_get_by_slug() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let phases = serde_json::to_string(&serde_json::json!([
+            {"name": "design", "slice_type": "HITL", "gate": "manual"},
+            {"name": "implement", "slice_type": "AFK", "gate": "auto"},
+            {"name": "review", "slice_type": "AFK", "gate": "manual"}
+        ]))
+        .unwrap();
+
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Feature X".into(),
+                description: "Build feature X".into(),
+                phases,
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        assert_eq!(arc.sequence_number, 1);
+        assert_eq!(arc.title, "Feature X");
+        assert_eq!(arc.status, "active");
+        assert_eq!(arc.project_slug, "proj");
+
+        // Phase defaults: first = active, rest = pending
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0]["status"], "active");
+        assert_eq!(parsed[1]["status"], "pending");
+        assert_eq!(parsed[2]["status"], "pending");
+
+        // History records creation
+        let history: Vec<HistoryEntry> = serde_json::from_str(&arc.history).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].kind, "arc_created");
+
+        // Get by slug/~N
+        let fetched = db.get_arc("proj/~1").unwrap().unwrap();
+        assert_eq!(fetched.id, arc.id);
+        assert_eq!(fetched.title, "Feature X");
+    }
+
+    #[test]
+    fn arc_sequence_numbers_are_per_project() {
+        let db = test_db();
+        db.create_project("alpha", "Alpha", "", None).unwrap();
+        db.create_project("beta", "Beta", "", None).unwrap();
+        let pa = db.get_project(None, Some("alpha")).unwrap().unwrap();
+        let pb = db.get_project(None, Some("beta")).unwrap().unwrap();
+
+        let phases = r#"[{"name":"do"}]"#.to_string();
+
+        let a1 = db
+            .create_arc(CreateArcParams {
+                project_id: pa.id,
+                project_slug: pa.slug.clone(),
+                title: "A1".into(),
+                description: String::new(),
+                phases: phases.clone(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+        let b1 = db
+            .create_arc(CreateArcParams {
+                project_id: pb.id,
+                project_slug: pb.slug.clone(),
+                title: "B1".into(),
+                description: String::new(),
+                phases: phases.clone(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+        let a2 = db
+            .create_arc(CreateArcParams {
+                project_id: pa.id,
+                project_slug: pa.slug.clone(),
+                title: "A2".into(),
+                description: String::new(),
+                phases,
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        assert_eq!(a1.sequence_number, 1);
+        assert_eq!(b1.sequence_number, 1);
+        assert_eq!(a2.sequence_number, 2);
+    }
+
+    #[test]
+    fn update_arc_records_history() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Original".into(),
+                description: String::new(),
+                phases: r#"[{"name":"do"}]"#.into(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        let updated = db
+            .update_arc(
+                &format!("proj/~{}", arc.sequence_number),
+                ArcUpdates {
+                    title: Some("Renamed".into()),
+                    status: Some("paused".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.title, "Renamed");
+        assert_eq!(updated.status, "paused");
+
+        let history: Vec<HistoryEntry> = serde_json::from_str(&updated.history).unwrap();
+        assert_eq!(history.len(), 3); // created + title updated + status changed
+        assert_eq!(history[1].kind, "updated");
+        assert_eq!(history[2].kind, "status_changed");
+    }
+
+    #[test]
+    fn update_arc_rejects_invalid_status() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        db.create_arc(CreateArcParams {
+            project_id: p.id,
+            project_slug: p.slug,
+            title: "Arc".into(),
+            description: String::new(),
+            phases: r#"[{"name":"do"}]"#.into(),
+            tags: "[]".into(),
+            context_refs: "[]".into(),
+        })
+        .unwrap();
+
+        let err = db
+            .update_arc(
+                "proj/~1",
+                ArcUpdates {
+                    status: Some("bogus".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid arc status"));
+    }
+
+    #[test]
+    fn task_with_arc_assignment() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Arc".into(),
+                description: String::new(),
+                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        let task = db
+            .create_task(CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Design doc".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: Some(arc.id),
+                arc_phase: Some("design".into()),
+            })
+            .unwrap();
+
+        assert_eq!(task.arc_id, Some(arc.id));
+        assert_eq!(task.arc_phase.as_deref(), Some("design"));
+
+        // Task without arc
+        let plain = create_test_task(&db, "proj", "No arc");
+        assert!(plain.arc_id.is_none());
+        assert!(plain.arc_phase.is_none());
+    }
+
+    #[test]
+    fn task_update_arc_assignment() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Arc".into(),
+                description: String::new(),
+                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        let task = create_test_task(&db, "proj", "Task");
+        assert!(task.arc_id.is_none());
+
+        let updated = db
+            .update_task(
+                &format!("proj/{}", task.sequence_number),
+                TaskUpdates {
+                    arc_id: Some(Some(arc.id)),
+                    arc_phase: Some(Some("implement".into())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.arc_id, Some(arc.id));
+        assert_eq!(updated.arc_phase.as_deref(), Some("implement"));
+
+        // Clear arc assignment
+        let cleared = db
+            .update_task(
+                &format!("proj/{}", task.sequence_number),
+                TaskUpdates {
+                    arc_id: Some(None),
+                    arc_phase: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert!(cleared.arc_id.is_none());
+        assert!(cleared.arc_phase.is_none());
+    }
+
+    #[test]
+    fn query_tasks_by_arc() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Arc".into(),
+                description: String::new(),
+                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+
+        // Create tasks: 2 in arc, 1 outside
+        db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug.clone(),
+            title: "Design task".into(),
+            description: String::new(),
+            category: None,
+            status: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            arc_id: Some(arc.id),
+            arc_phase: Some("design".into()),
+        })
+        .unwrap();
+        db.create_task(CreateTaskParams {
+            project_id: p.id,
+            project_slug: p.slug.clone(),
+            title: "Impl task".into(),
+            description: String::new(),
+            category: None,
+            status: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            arc_id: Some(arc.id),
+            arc_phase: Some("implement".into()),
+        })
+        .unwrap();
+        create_test_task(&db, "proj", "Unrelated");
+
+        let arc_tasks = db
+            .list_tasks(&TaskQueryFilter {
+                arc_id: Some(arc.id),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(arc_tasks.len(), 2);
+
+        let all_tasks = db.list_tasks(&TaskQueryFilter::default()).unwrap();
+        assert_eq!(all_tasks.len(), 3);
     }
 }
