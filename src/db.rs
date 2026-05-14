@@ -1320,8 +1320,12 @@ impl Db {
         skip: bool,
         note: Option<String>,
     ) -> Result<ArcRow, YojanaError> {
-        let conn = self.conn.lock();
-        let arc = resolve_arc(&conn, identifier)?;
+        let mut conn = self.conn.lock();
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(YojanaError::Db)?;
+
+        let arc = resolve_arc(&tx, identifier)?;
         let now = chrono::Utc::now().timestamp_millis();
         let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
@@ -1381,12 +1385,15 @@ impl Db {
         let phases_json = serde_json::to_string(&phases)?;
         let history_json = serde_json::to_string(&history)?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE arcs SET phases=?1, history=?2, updated_at=?3 WHERE id=?4",
             rusqlite::params![phases_json, history_json, now, arc.id.as_bytes().as_slice(),],
         )?;
 
-        get_arc_by_uuid(&conn, &arc.id)?.ok_or_else(|| YojanaError::NotFound("advanced arc".into()))
+        let result = get_arc_by_uuid(&tx, &arc.id)?
+            .ok_or_else(|| YojanaError::NotFound("advanced arc".into()))?;
+        tx.commit().map_err(YojanaError::Db)?;
+        Ok(result)
     }
 
     pub fn revert_arc_phase(
@@ -1395,8 +1402,12 @@ impl Db {
         phase_name: &str,
         note: Option<String>,
     ) -> Result<ArcRow, YojanaError> {
-        let conn = self.conn.lock();
-        let arc = resolve_arc(&conn, identifier)?;
+        let mut conn = self.conn.lock();
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(YojanaError::Db)?;
+
+        let arc = resolve_arc(&tx, identifier)?;
         let now = chrono::Utc::now().timestamp_millis();
         let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
@@ -1435,12 +1446,15 @@ impl Db {
         let phases_json = serde_json::to_string(&phases)?;
         let history_json = serde_json::to_string(&history)?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE arcs SET phases=?1, history=?2, updated_at=?3 WHERE id=?4",
             rusqlite::params![phases_json, history_json, now, arc.id.as_bytes().as_slice(),],
         )?;
 
-        get_arc_by_uuid(&conn, &arc.id)?.ok_or_else(|| YojanaError::NotFound("reverted arc".into()))
+        let result = get_arc_by_uuid(&tx, &arc.id)?
+            .ok_or_else(|| YojanaError::NotFound("reverted arc".into()))?;
+        tx.commit().map_err(YojanaError::Db)?;
+        Ok(result)
     }
 
     // --- Query methods ---
