@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,6 +25,9 @@ pub struct QueryArgs {
     /// Filter by tag (tasks containing this tag)
     #[serde(default)]
     pub tag: Option<String>,
+    /// Filter by arc (UUID or "project-slug/~N"). When set, results are grouped by phase.
+    #[serde(default)]
+    pub arc: Option<String>,
     /// Max results to return (default 100)
     #[serde(default)]
     pub limit: Option<i64>,
@@ -52,6 +57,8 @@ pub struct QueryResultItem {
     pub blocked: bool,
     pub blocked_by: Vec<String>,
     pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_phase: Option<String>,
 }
 
 fn resolve_project_ids(db: &Db, project: &str) -> Result<Vec<Uuid>, YojanaError> {
@@ -83,6 +90,7 @@ fn enrich(tasks: Vec<TaskRow>, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec
                 blocked,
                 blocked_by: blockers.iter().map(|id| id.to_string()).collect(),
                 updated_at: t.updated_at,
+                arc_phase: t.arc_phase,
             }
         })
         .collect()
@@ -97,6 +105,12 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         .project
         .as_deref()
         .map(|p| resolve_project_ids(db, p))
+        .transpose()?;
+
+    let arc_id = args
+        .arc
+        .as_deref()
+        .map(|a| db.resolve_arc_id(a))
         .transpose()?;
 
     let cutoff = if args.include_all_terminal || args.status.is_some() {
@@ -117,11 +131,25 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         limit: args.limit,
         offset: args.offset,
         include_terminal_after: cutoff,
-        arc_id: None,
+        arc_id,
     };
 
     let tasks = db.list_tasks(&filter)?;
     let deps = db.list_depends_on_with_status()?;
     let results = enrich(tasks, &deps);
-    Ok(serde_json::to_value(results)?)
+
+    if args.arc.is_some() {
+        let mut grouped: BTreeMap<String, Vec<&QueryResultItem>> = BTreeMap::new();
+        for item in &results {
+            let phase = item
+                .arc_phase
+                .as_deref()
+                .unwrap_or("unassigned")
+                .to_string();
+            grouped.entry(phase).or_default().push(item);
+        }
+        Ok(serde_json::to_value(grouped)?)
+    } else {
+        Ok(serde_json::to_value(results)?)
+    }
 }

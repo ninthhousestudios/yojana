@@ -1,3 +1,4 @@
+pub mod arc;
 pub mod context;
 pub mod edge;
 pub mod project;

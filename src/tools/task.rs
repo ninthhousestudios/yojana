@@ -80,6 +80,12 @@ pub struct TaskArgs {
     /// context_ref. Use with action=update (typically alongside status=done).
     #[serde(default)]
     pub commit: Option<String>,
+    /// Arc identifier (UUID or "project-slug/~N"). Must be provided with arc_phase.
+    #[serde(default)]
+    pub arc_id: Option<String>,
+    /// Phase name within the arc. Must be provided with arc_id.
+    #[serde(default)]
+    pub arc_phase: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +114,10 @@ pub struct TaskOutput {
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_phase: Option<String>,
 }
 
 impl From<TaskRow> for TaskOutput {
@@ -138,6 +148,8 @@ impl From<TaskRow> for TaskOutput {
             created_at: row.created_at,
             updated_at: row.updated_at,
             completed_at: row.completed_at,
+            arc_id: row.arc_id.map(|id| id.to_string()),
+            arc_phase: row.arc_phase,
         }
     }
 }
@@ -188,6 +200,27 @@ fn to_json(val: &(impl serde::Serialize + ?Sized)) -> Result<String, YojanaError
     serde_json::to_string(val).map_err(YojanaError::Json)
 }
 
+fn resolve_arc_assignment(
+    db: &Db,
+    arc_id: Option<&str>,
+    arc_phase: Option<&str>,
+) -> Result<(Option<Uuid>, Option<String>), YojanaError> {
+    match (arc_id, arc_phase) {
+        (None, None) => Ok((None, None)),
+        (Some(_), None) => Err(YojanaError::InvalidInput(
+            "arc_phase required when arc_id is provided".into(),
+        )),
+        (None, Some(_)) => Err(YojanaError::InvalidInput(
+            "arc_id required when arc_phase is provided".into(),
+        )),
+        (Some(arc_str), Some(phase)) => {
+            let uuid = db.resolve_arc_id(arc_str)?;
+            db.validate_task_arc(&uuid, phase)?;
+            Ok((Some(uuid), Some(phase.to_string())))
+        }
+    }
+}
+
 fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError> {
     let row = if Uuid::parse_str(project).is_ok() {
         db.get_project(Some(project), None)?
@@ -217,6 +250,11 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
             validate_context_refs(refs)?;
+            let (arc_uuid, arc_phase) = resolve_arc_assignment(
+                db,
+                args.arc_id.as_deref(),
+                args.arc_phase.as_deref(),
+            )?;
 
             let (project_id, project_slug) = resolve_project(db, project)?;
 
@@ -237,8 +275,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 execution_record: args.execution_record.flatten(),
                 reproduction: args.reproduction.flatten(),
                 root_cause: args.root_cause.flatten(),
-                arc_id: None,
-                arc_phase: None,
+                arc_id: arc_uuid,
+                arc_phase,
             };
             let row = db.create_task(params)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)
@@ -270,6 +308,25 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             if let Some(ref refs) = args.context_refs {
                 validate_context_refs(refs)?;
             }
+            let (arc_id_update, arc_phase_update) =
+                match (args.arc_id.as_deref(), args.arc_phase.as_deref()) {
+                    (None, None) => (None, None),
+                    (Some(_), None) => {
+                        return Err(YojanaError::InvalidInput(
+                            "arc_phase required when arc_id is provided".into(),
+                        ));
+                    }
+                    (None, Some(_)) => {
+                        return Err(YojanaError::InvalidInput(
+                            "arc_id required when arc_phase is provided".into(),
+                        ));
+                    }
+                    (Some(arc_str), Some(phase)) => {
+                        let uuid = db.resolve_arc_id(arc_str)?;
+                        db.validate_task_arc(&uuid, phase)?;
+                        (Some(Some(uuid)), Some(Some(phase.to_string())))
+                    }
+                };
             // If a commit shorthand is provided, append it as a git:commit
             // context_ref. Combines with any explicit context_refs the caller
             // also passed (those take precedence as the base list).
@@ -304,8 +361,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 context_refs: merged_context_refs.map(|v| to_json(&v)).transpose()?,
                 files: args.files.map(|v| to_json(&v)).transpose()?,
                 tags: args.tags.map(|v| to_json(&v)).transpose()?,
-                arc_id: None,
-                arc_phase: None,
+                arc_id: arc_id_update,
+                arc_phase: arc_phase_update,
             };
             let row = db.update_task(id, updates)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)

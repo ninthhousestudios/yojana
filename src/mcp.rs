@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::error::YojanaError;
 use crate::tools;
+use crate::tools::arc::ArcArgs;
 use crate::tools::context::ContextArgs;
 use crate::tools::edge::EdgeArgs;
 use crate::tools::project::ProjectArgs;
@@ -57,7 +58,18 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, get, update, or comment on tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change), comment (requires id, text; optional author). Supports acceptance_criteria, decisions, context_refs as JSON arrays."
+        description = "Create, get, or update arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending; returns project/~N identifier), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs)."
+    )]
+    pub async fn yojana_arc(
+        &self,
+        Parameters(args): Parameters<ArcArgs>,
+    ) -> Result<String, ErrorData> {
+        let out = tools::arc::handle(&self.db, args).map_err(err_to_rmcp)?;
+        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+    }
+
+    #[tool(
+        description = "Create, get, update, or comment on tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change), comment (requires id, text; optional author). Supports acceptance_criteria, decisions, context_refs as JSON arrays. Optional arc_id + arc_phase to assign task to an arc phase."
     )]
     pub async fn yojana_task(
         &self,
