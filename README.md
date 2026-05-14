@@ -4,11 +4,32 @@
 
 Local task graph for the manas ecosystem. SQLite-backed, exposed as an MCP server and a CLI. Tracks projects, tasks, dependencies, and contextual references for agent and human workflows.
 
-## TODO
+## Arcs
 
-We are soon going to be implementing another tracking layer on top of what currently
-exists for the purpose of lifecycle tracking. See docs/task-lifecycle-arcs.md for the
-problem information and basic sketch.
+Arcs are lifecycle containers for tasks. A feature, bugfix, or spike flows through ordered phases — each phase groups related tasks and gates dispatch. Arcs live within a single project; cross-project work is tracked via task edges (`motivated_by`, `depends_on`).
+
+**Key concepts:**
+
+- **Phases** are defined inline at creation time (yojana validates shape, not vocabulary). Each phase has a `name`, optional `slice_type` (AFK/HITL), optional `gate` (auto/manual), and a `status` (active/pending/completed/skipped).
+- The first phase defaults to `active`; the rest start `pending`. The current phase is derived (first non-completed, non-skipped phase).
+- **Auto-gated** phases advance automatically when all their tasks reach terminal status (`done`/`wontfix`). Empty phases do not auto-advance.
+- **Manual-gated** phases require explicit `advance` to proceed — useful as quality gates.
+- **Phase revert** sets a completed phase back to active without cascading.
+- **Arc status** (`active`/`paused`/`completed`/`abandoned`) is independent of phase progress. Pausing an arc stops all dispatch of its tasks without touching individual task statuses.
+- `yojana_ready` only returns tasks whose arc phase is `active` and whose arc is `active`. Tasks not in any arc behave as before.
+- `yojana_context` for a task includes its arc position and prior-phase decisions. Arcs also have a `summary` context shape.
+
+**Identifiers:** arcs use a `~` sigil — `project/~N` (e.g. `yojana/~3`) to distinguish from task IDs.
+
+**Example phase sets:**
+
+| Arc type | Phases |
+|---|---|
+| Feature | design, decompose, implement, review, verify |
+| Bugfix | diagnose, fix, verify |
+| Spike | explore, synthesize, decide |
+
+See `docs/task-lifecycle-arcs.md` for the full design doc.
 
 ## Install
 
@@ -109,12 +130,13 @@ Diamond nodes (depended on by multiple tasks) are shown once; subsequent appeara
 All tools live under `mcp__yojana__*`. Highlights:
 
 - `yojana_project` — create/get/update/list projects.
-- `yojana_task` — create/get/update/comment on tasks. Supports a `commit` shorthand on `update` that appends a `git:commit` context_ref (so agents can record outcomes the same way as the CLI):
+- `yojana_task` — create/get/update/comment on tasks. Supports `arc_id` + `arc_phase` to assign a task to an arc phase, and a `commit` shorthand on `update` that appends a `git:commit` context_ref:
   ```json
   {"action": "update", "id": "yojana/9", "status": "done", "commit": "abc1234"}
   ```
-- `yojana_query` — list tasks with filters. `include_all_terminal: true` disables the 24h done/wontfix hide; `recent_terminal_window_ms` overrides the window. `status: "done"` returns all done tasks regardless.
-- `yojana_edge`, `yojana_ready`, `yojana_context` — dependency edges, ready-set queries, context-shape rollups.
+- `yojana_arc` — create/get/update/advance/revert arcs. Create requires `project`, `title`, and `phases` (array of `{name, slice_type?, gate?}`). Advance moves to the next phase (or `skip=true` to mark skipped). Revert sets a completed phase back to active.
+- `yojana_query` — list tasks with filters. Supports `arc` filter to scope by arc ID. `include_all_terminal: true` disables the 24h done/wontfix hide; `status: "done"` returns all done tasks regardless.
+- `yojana_edge`, `yojana_ready`, `yojana_context` — dependency edges, ready-set queries, context-shape rollups. `yojana_ready` phase-gates arc tasks; `yojana_context` includes arc position for tasks in arcs.
 
 ## Status model
 
