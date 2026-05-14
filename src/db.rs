@@ -190,7 +190,7 @@ pub const TERMINAL_STATUSES: &[&str] = &["done", "wontfix"];
 
 // --- Project statuses ---
 
-const VALID_PROJECT_STATUSES: &[&str] = &["active", "paused", "archived"];
+const VALID_PROJECT_STATUSES: &[&str] = &["active", "production", "paused", "archived"];
 
 // --- Edge types ---
 

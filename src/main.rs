@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{CreateTaskParams, Db, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates};
+use yojana::db::{CreateTaskParams, Db, ProjectUpdates, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates};
 use yojana::display::{self, EdgeDirection, EdgeDisplay, format_dependency_tree};
 use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
@@ -86,10 +86,10 @@ enum Command {
         #[arg(long)]
         parent: Option<String>,
     },
-    /// Edit a task's title, description, status, or category
+    /// Edit a task's title, description, status, or category. Pass a bare project slug to edit the project instead.
     #[command(name = "task-edit")]
     TaskEdit {
-        /// Task identifier (slug/N or UUID)
+        /// Task identifier (slug/N or UUID), or bare project slug
         id: String,
         /// New title
         #[arg(long)]
@@ -152,9 +152,30 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 None => {
-                    let status = if all { None } else { Some("active") };
-                    let projects = db.list_projects(status, Some(None), None, None)?;
-                    println!("{}", display::format_projects_list(&projects));
+                    if all {
+                        let projects = db.list_projects(None, Some(None), None, None)?;
+                        println!("{}", display::format_projects_list(&projects));
+                    } else {
+                        let active =
+                            db.list_projects(Some("active"), Some(None), None, None)?;
+                        let production =
+                            db.list_projects(Some("production"), Some(None), None, None)?;
+                        if active.is_empty() && production.is_empty() {
+                            println!("No projects found.");
+                        } else {
+                            if !active.is_empty() {
+                                println!("Active");
+                                println!("{}", display::format_projects_list(&active));
+                            }
+                            if !production.is_empty() {
+                                if !active.is_empty() {
+                                    println!();
+                                }
+                                println!("Production");
+                                println!("{}", display::format_projects_list(&production));
+                            }
+                        }
+                    }
                 }
             }
             Ok(())
@@ -263,17 +284,28 @@ async fn main() -> anyhow::Result<()> {
             }
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
-            let updates = TaskUpdates {
-                title,
-                description,
-                status,
-                force_status: true,
-                category: category.map(|c| if c.is_empty() { None } else { Some(c) }),
-                ..Default::default()
-            };
-            let updated = db.update_task(&id, updates)?;
-            let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
-            println!("{} updated", human_id);
+
+            let is_task_id = id.contains('/') || uuid::Uuid::try_parse(&id).is_ok();
+            if is_task_id {
+                let updates = TaskUpdates {
+                    title,
+                    description,
+                    status,
+                    force_status: true,
+                    category: category.map(|c| if c.is_empty() { None } else { Some(c) }),
+                    ..Default::default()
+                };
+                let updated = db.update_task(&id, updates)?;
+                let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
+                println!("{} updated", human_id);
+            } else {
+                let updates = ProjectUpdates {
+                    status,
+                    ..Default::default()
+                };
+                let updated = db.update_project(None, Some(&id), updates)?;
+                println!("{} updated", updated.slug);
+            }
             Ok(())
         }
         Command::Todo {
