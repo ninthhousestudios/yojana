@@ -468,7 +468,7 @@ async fn serve_http() -> anyhow::Result<()> {
     tracing::info!("yojana serving on {addr}");
 
     let mut session_manager = LocalSessionManager::default();
-    session_manager.session_config.keep_alive = Some(std::time::Duration::from_secs(900));
+    session_manager.session_config.keep_alive = None;
     let session_manager = Arc::new(session_manager);
 
     let cancel = CancellationToken::new();
