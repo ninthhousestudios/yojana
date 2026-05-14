@@ -302,7 +302,11 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         .get::<_, Option<Vec<u8>>>("arc_id")?
         .map(|bytes| {
             Uuid::from_slice(&bytes).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
             })
         })
         .transpose()?;
@@ -516,10 +520,7 @@ fn apply_phase_defaults(phases: &[serde_json::Value]) -> Vec<serde_json::Value> 
                 obj.insert("status".into(), serde_json::Value::String(status.into()));
             }
             if !obj.contains_key("gate") {
-                obj.insert(
-                    "gate".into(),
-                    serde_json::Value::String("manual".into()),
-                );
+                obj.insert("gate".into(), serde_json::Value::String("manual".into()));
             }
             phase
         })
@@ -1181,8 +1182,7 @@ impl Db {
             ],
         )?;
 
-        get_arc_by_uuid(&conn, &id)?
-            .ok_or_else(|| YojanaError::NotFound("just-created arc".into()))
+        get_arc_by_uuid(&conn, &id)?.ok_or_else(|| YojanaError::NotFound("just-created arc".into()))
     }
 
     pub fn get_arc(&self, identifier: &str) -> Result<Option<ArcRow>, YojanaError> {
@@ -1193,11 +1193,7 @@ impl Db {
         }
     }
 
-    pub fn update_arc(
-        &self,
-        identifier: &str,
-        updates: ArcUpdates,
-    ) -> Result<ArcRow, YojanaError> {
+    pub fn update_arc(&self, identifier: &str, updates: ArcUpdates) -> Result<ArcRow, YojanaError> {
         let conn = self.conn.lock();
         let arc = resolve_arc(&conn, identifier)?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -1252,15 +1248,10 @@ impl Db {
             ],
         )?;
 
-        get_arc_by_uuid(&conn, &arc.id)?
-            .ok_or_else(|| YojanaError::NotFound("updated arc".into()))
+        get_arc_by_uuid(&conn, &arc.id)?.ok_or_else(|| YojanaError::NotFound("updated arc".into()))
     }
 
-    pub fn validate_task_arc(
-        &self,
-        arc_id: &Uuid,
-        arc_phase: &str,
-    ) -> Result<(), YojanaError> {
+    pub fn validate_task_arc(&self, arc_id: &Uuid, arc_phase: &str) -> Result<(), YojanaError> {
         let conn = self.conn.lock();
         let arc = get_arc_by_uuid(&conn, arc_id)?
             .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
@@ -1803,8 +1794,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
-            arc_id: None,
-            arc_phase: None,
+                arc_id: None,
+                arc_phase: None,
             })
             .unwrap();
         assert_eq!(t.status, "ready-for-agent");
@@ -1829,8 +1820,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         });
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains("unknown status"));
@@ -1929,8 +1920,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
-            arc_id: None,
-            arc_phase: None,
+                arc_id: None,
+                arc_phase: None,
             })
             .unwrap();
 
@@ -2370,8 +2361,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
         create_test_task(&db, "proj", "Untagged");
@@ -2604,8 +2595,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 
@@ -2649,8 +2640,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
-            arc_id: None,
-            arc_phase: None,
+                arc_id: None,
+                arc_phase: None,
             })
             .unwrap();
         assert_eq!(t.category.as_deref(), Some("bug"));
@@ -2876,8 +2867,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 
@@ -2925,8 +2916,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 

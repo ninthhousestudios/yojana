@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::db::{ArcRow, CreateArcParams, Db, HistoryEntry, ArcUpdates};
+use crate::db::{ArcRow, ArcUpdates, CreateArcParams, Db, HistoryEntry};
 use crate::error::YojanaError;
 
 #[derive(Debug, Deserialize, JsonSchema)]

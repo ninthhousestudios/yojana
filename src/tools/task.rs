@@ -250,11 +250,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
             validate_context_refs(refs)?;
-            let (arc_uuid, arc_phase) = resolve_arc_assignment(
-                db,
-                args.arc_id.as_deref(),
-                args.arc_phase.as_deref(),
-            )?;
+            let (arc_uuid, arc_phase) =
+                resolve_arc_assignment(db, args.arc_id.as_deref(), args.arc_phase.as_deref())?;
 
             let (project_id, project_slug) = resolve_project(db, project)?;
 

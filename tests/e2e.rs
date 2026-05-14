@@ -32,8 +32,8 @@ fn full_flow_v0() {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 
@@ -55,8 +55,8 @@ fn full_flow_v0() {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 
@@ -78,8 +78,8 @@ fn full_flow_v0() {
             execution_record: None,
             reproduction: None,
             root_cause: None,
-        arc_id: None,
-        arc_phase: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap();
 
