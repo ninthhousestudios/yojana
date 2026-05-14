@@ -379,6 +379,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 arc_phase: arc_phase_update,
             };
             let row = db.update_task(id, updates)?;
+            db.try_auto_advance_phase(&row.id)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)
         }
         "comment" => {
@@ -402,5 +403,126 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
         other => Err(YojanaError::InvalidInput(format!(
             "unknown action '{other}'; valid: create, get, update, comment"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::arc;
+
+    fn test_db() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
+        db
+    }
+
+    fn create_arc(db: &Db) -> serde_json::Value {
+        arc::handle(
+            db,
+            arc::ArcArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Test Arc".into()),
+                description: None,
+                status: None,
+                phases: Some(vec![
+                    serde_json::json!({"name": "design", "gate": "auto"}),
+                    serde_json::json!({"name": "implement", "gate": "auto"}),
+                ]),
+                tags: None,
+                context_refs: None,
+                phase: None,
+                note: None,
+                skip: None,
+            },
+        )
+        .unwrap()
+    }
+
+    fn task_args_create(title: &str, phase: &str) -> TaskArgs {
+        TaskArgs {
+            action: "create".into(),
+            id: None,
+            project: Some("proj".into()),
+            title: Some(title.into()),
+            description: None,
+            category: None,
+            status: None,
+            slice_type: None,
+            acceptance_criteria: None,
+            decisions: None,
+            context_refs: None,
+            files: None,
+            tags: None,
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            text: None,
+            author: None,
+            commit: None,
+            arc_id: Some("proj/~1".into()),
+            arc_phase: Some(phase.into()),
+        }
+    }
+
+    fn update_status(db: &Db, id: &str, status: &str) -> serde_json::Value {
+        handle(
+            db,
+            TaskArgs {
+                action: "update".into(),
+                id: Some(id.into()),
+                project: None,
+                title: None,
+                description: None,
+                category: None,
+                status: Some(status.into()),
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_advance_via_task_update_tool() {
+        let db = test_db();
+        create_arc(&db);
+        let t = handle(&db, task_args_create("Design doc", "design")).unwrap();
+        let tid = t["human_id"].as_str().unwrap();
+
+        update_status(&db, tid, "in-progress");
+        update_status(&db, tid, "done");
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(
+            phases[0]["status"], "completed",
+            "design should auto-advance to completed"
+        );
+        assert_eq!(
+            phases[1]["status"], "active",
+            "implement should become active"
+        );
+
+        let history: Vec<crate::db::HistoryEntry> = serde_json::from_str(&arc.history).unwrap();
+        let auto = history.iter().find(|e| e.kind == "phase_auto_advanced");
+        assert!(auto.is_some(), "should log phase_auto_advanced");
+        assert_eq!(auto.unwrap().payload["trigger_task"], tid);
     }
 }

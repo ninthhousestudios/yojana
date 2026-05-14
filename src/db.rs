@@ -1457,6 +1457,112 @@ impl Db {
         Ok(result)
     }
 
+    pub fn try_auto_advance_phase(&self, task_id: &Uuid) -> Result<bool, YojanaError> {
+        let mut conn = self.conn.lock();
+
+        let task = get_task_by_uuid(&conn, task_id)?
+            .ok_or_else(|| YojanaError::NotFound(format!("task '{task_id}'")))?;
+
+        let (arc_id, arc_phase) = match (&task.arc_id, &task.arc_phase) {
+            (Some(id), Some(phase)) => (*id, phase.clone()),
+            _ => return Ok(false),
+        };
+
+        if !TERMINAL_STATUSES.contains(&task.status.as_str()) {
+            return Ok(false);
+        }
+
+        let arc = get_arc_by_uuid(&conn, &arc_id)?
+            .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
+
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
+        let phase_idx = match phases
+            .iter()
+            .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(&arc_phase))
+        {
+            Some(i) => i,
+            None => return Ok(false),
+        };
+
+        let gate = phases[phase_idx]
+            .get("gate")
+            .and_then(|g| g.as_str())
+            .unwrap_or("auto");
+        if gate != "auto" {
+            return Ok(false);
+        }
+
+        let phase_status = phases[phase_idx]
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("pending");
+        if phase_status != "active" {
+            return Ok(false);
+        }
+
+        let all_terminal = {
+            let mut stmt = conn.prepare(&format!(
+                "{TASK_SELECT} WHERE t.arc_id = ?1 AND t.arc_phase = ?2"
+            ))?;
+            let sibling_tasks: Vec<TaskRow> = stmt
+                .query_map(
+                    rusqlite::params![arc_id.as_bytes().as_slice(), &arc_phase],
+                    map_task_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if sibling_tasks.is_empty() {
+                return Ok(false);
+            }
+
+            sibling_tasks
+                .iter()
+                .all(|t| TERMINAL_STATUSES.contains(&t.status.as_str()))
+        };
+        if !all_terminal {
+            return Ok(false);
+        }
+
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(YojanaError::Db)?;
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
+        let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
+
+        phases[phase_idx]["status"] = serde_json::Value::String("completed".into());
+
+        if let Some(next) = phases[phase_idx + 1..]
+            .iter_mut()
+            .find(|p| p.get("status").and_then(|s| s.as_str()) == Some("pending"))
+        {
+            next["status"] = serde_json::Value::String("active".into());
+        }
+
+        history.push(HistoryEntry {
+            ts: now,
+            kind: "phase_auto_advanced".into(),
+            payload: serde_json::json!({
+                "phase": arc_phase,
+                "from": "active",
+                "to": "completed",
+                "trigger_task": format!("{}/{}", task.project_slug, task.sequence_number),
+            }),
+        });
+
+        let phases_json = serde_json::to_string(&phases)?;
+        let history_json = serde_json::to_string(&history)?;
+
+        tx.execute(
+            "UPDATE arcs SET phases=?1, history=?2, updated_at=?3 WHERE id=?4",
+            rusqlite::params![phases_json, history_json, now, arc.id.as_bytes().as_slice()],
+        )?;
+        tx.commit().map_err(YojanaError::Db)?;
+
+        Ok(true)
+    }
+
     // --- Query methods ---
 
     pub fn list_tasks(&self, filter: &TaskQueryFilter) -> Result<Vec<TaskRow>, YojanaError> {
@@ -3526,5 +3632,206 @@ mod tests {
 
         let all_tasks = db.list_tasks(&TaskQueryFilter::default()).unwrap();
         assert_eq!(all_tasks.len(), 3);
+    }
+
+    // --- Auto-advance tests ---
+
+    fn setup_arc_with_auto_gate(db: &Db) -> (Uuid, Uuid) {
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+        let phases = serde_json::to_string(&serde_json::json!([
+            {"name": "design", "gate": "auto"},
+            {"name": "implement", "gate": "auto"},
+        ]))
+        .unwrap();
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: "proj".into(),
+                title: "Test Arc".into(),
+                description: String::new(),
+                phases,
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+        (p.id, arc.id)
+    }
+
+    fn create_arc_task(db: &Db, project_id: Uuid, arc_id: Uuid, phase: &str) -> TaskRow {
+        db.create_task(CreateTaskParams {
+            project_id,
+            project_slug: "proj".into(),
+            title: format!("Task in {phase}"),
+            description: String::new(),
+            category: None,
+            status: None,
+            slice_type: None,
+            acceptance_criteria: "[]".into(),
+            decisions: "[]".into(),
+            context_refs: "[]".into(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            arc_id: Some(arc_id),
+            arc_phase: Some(phase.into()),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_advance_completes_phase_and_activates_next() {
+        let db = test_db();
+        let (pid, arc_id) = setup_arc_with_auto_gate(&db);
+        let t1 = create_arc_task(&db, pid, arc_id, "design");
+
+        // Transition to done: needs-triage → in-progress → done
+        advance_to(
+            &db,
+            &format!("proj/{}", t1.sequence_number),
+            &["in-progress", "done"],
+        );
+
+        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        assert!(result, "should have auto-advanced");
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(phases[0]["status"], "completed");
+        assert_eq!(phases[1]["status"], "active");
+    }
+
+    #[test]
+    fn auto_advance_wontfix_counts_as_terminal() {
+        let db = test_db();
+        let (pid, arc_id) = setup_arc_with_auto_gate(&db);
+        let t1 = create_arc_task(&db, pid, arc_id, "design");
+
+        advance_to(&db, &format!("proj/{}", t1.sequence_number), &["wontfix"]);
+
+        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        assert!(result);
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(phases[0]["status"], "completed");
+    }
+
+    #[test]
+    fn auto_advance_skipped_when_not_all_terminal() {
+        let db = test_db();
+        let (pid, arc_id) = setup_arc_with_auto_gate(&db);
+        let t1 = create_arc_task(&db, pid, arc_id, "design");
+        let _t2 = create_arc_task(&db, pid, arc_id, "design");
+
+        advance_to(
+            &db,
+            &format!("proj/{}", t1.sequence_number),
+            &["in-progress", "done"],
+        );
+
+        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        assert!(!result, "should NOT advance — t2 still open");
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(phases[0]["status"], "active");
+    }
+
+    #[test]
+    fn auto_advance_skipped_for_manual_gate() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None).unwrap();
+        let p = db.get_project(None, Some("proj")).unwrap().unwrap();
+        let phases = serde_json::to_string(&serde_json::json!([
+            {"name": "design", "gate": "manual"},
+            {"name": "implement", "gate": "auto"},
+        ]))
+        .unwrap();
+        let arc = db
+            .create_arc(CreateArcParams {
+                project_id: p.id,
+                project_slug: "proj".into(),
+                title: "Manual Arc".into(),
+                description: String::new(),
+                phases,
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            })
+            .unwrap();
+        let t1 = create_arc_task(&db, p.id, arc.id, "design");
+        advance_to(
+            &db,
+            &format!("proj/{}", t1.sequence_number),
+            &["in-progress", "done"],
+        );
+
+        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        assert!(!result, "manual gate should not auto-advance");
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
+        assert_eq!(phases[0]["status"], "active");
+    }
+
+    #[test]
+    fn auto_advance_skipped_for_zero_task_phase() {
+        let db = test_db();
+        let (_pid, _arc_id) = setup_arc_with_auto_gate(&db);
+
+        // Create a fake task not in any arc to test the no-arc path
+        let task = db
+            .create_task(CreateTaskParams {
+                project_id: _pid,
+                project_slug: "proj".into(),
+                title: "Plain task".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            })
+            .unwrap();
+
+        let result = db.try_auto_advance_phase(&task.id).unwrap();
+        assert!(!result, "task without arc should return false");
+    }
+
+    #[test]
+    fn auto_advance_history_is_distinguishable() {
+        let db = test_db();
+        let (pid, arc_id) = setup_arc_with_auto_gate(&db);
+        let t1 = create_arc_task(&db, pid, arc_id, "design");
+        advance_to(
+            &db,
+            &format!("proj/{}", t1.sequence_number),
+            &["in-progress", "done"],
+        );
+
+        db.try_auto_advance_phase(&t1.id).unwrap();
+
+        let arc = db.get_arc("proj/~1").unwrap().unwrap();
+        let history: Vec<HistoryEntry> = serde_json::from_str(&arc.history).unwrap();
+        let auto_entry = history.iter().find(|e| e.kind == "phase_auto_advanced");
+        assert!(
+            auto_entry.is_some(),
+            "should have phase_auto_advanced entry"
+        );
+        let payload = &auto_entry.unwrap().payload;
+        assert_eq!(payload["phase"], "design");
+        assert_eq!(payload["to"], "completed");
     }
 }
