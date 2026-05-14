@@ -203,6 +203,8 @@ mod tests {
             created_at: 1000,
             updated_at: 2000,
             completed_at: None,
+            arc_id: None,
+            arc_phase: None,
         }
     }
 

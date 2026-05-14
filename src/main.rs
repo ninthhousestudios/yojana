@@ -319,6 +319,8 @@ async fn main() -> anyhow::Result<()> {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
+                arc_id: None,
+                arc_phase: None,
             };
             let row = db.create_task(params)?;
             println!("{}/{}", row.project_slug, row.sequence_number);

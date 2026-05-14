@@ -237,6 +237,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 execution_record: args.execution_record.flatten(),
                 reproduction: args.reproduction.flatten(),
                 root_cause: args.root_cause.flatten(),
+                arc_id: None,
+                arc_phase: None,
             };
             let row = db.create_task(params)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)
@@ -302,6 +304,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 context_refs: merged_context_refs.map(|v| to_json(&v)).transpose()?,
                 files: args.files.map(|v| to_json(&v)).transpose()?,
                 tags: args.tags.map(|v| to_json(&v)).transpose()?,
+                arc_id: None,
+                arc_phase: None,
             };
             let row = db.update_task(id, updates)?;
             Ok(serde_json::to_value(TaskOutput::from(row))?)

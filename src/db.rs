@@ -42,6 +42,53 @@ pub struct ProjectUpdates {
     pub handoff: Option<Option<String>>,
 }
 
+// --- Arc types ---
+
+pub const VALID_ARC_STATUSES: &[&str] = &["active", "paused", "completed", "abandoned"];
+pub const VALID_PHASE_STATUSES: &[&str] = &["pending", "active", "completed", "skipped"];
+pub const VALID_PHASE_GATES: &[&str] = &["auto", "manual"];
+
+#[derive(Debug)]
+pub struct ArcRow {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub project_slug: String,
+    pub sequence_number: i64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub phases: String,
+    pub tags: String,
+    pub context_refs: String,
+    pub history: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+pub struct CreateArcParams {
+    pub project_id: Uuid,
+    pub project_slug: String,
+    pub title: String,
+    pub description: String,
+    pub phases: String,
+    pub tags: String,
+    pub context_refs: String,
+}
+
+#[derive(Debug, Default)]
+pub struct ArcUpdates {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub tags: Option<String>,
+    pub context_refs: Option<String>,
+}
+
+enum ArcIdentifier {
+    Uuid(Uuid),
+    SlugSeq(String, i64),
+}
+
 // --- Task types ---
 
 #[derive(Debug)]
@@ -68,6 +115,8 @@ pub struct TaskRow {
     pub created_at: i64,
     pub updated_at: i64,
     pub completed_at: Option<i64>,
+    pub arc_id: Option<Uuid>,
+    pub arc_phase: Option<String>,
 }
 
 pub struct CreateTaskParams {
@@ -87,6 +136,8 @@ pub struct CreateTaskParams {
     pub execution_record: Option<String>,
     pub reproduction: Option<String>,
     pub root_cause: Option<String>,
+    pub arc_id: Option<Uuid>,
+    pub arc_phase: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -107,6 +158,8 @@ pub struct TaskUpdates {
     pub context_refs: Option<String>,
     pub files: Option<String>,
     pub tags: Option<String>,
+    pub arc_id: Option<Option<Uuid>>,
+    pub arc_phase: Option<Option<String>>,
 }
 
 enum TaskIdentifier {
@@ -129,6 +182,7 @@ pub struct TaskQueryFilter {
     /// if their completed_at >= this timestamp (millis). Non-terminal tasks
     /// are unaffected.
     pub include_terminal_after: Option<i64>,
+    pub arc_id: Option<Uuid>,
 }
 
 /// Statuses that count as "terminal" for default-hide filtering.
@@ -233,7 +287,7 @@ const TASK_SELECT: &str = "\
     t.acceptance_criteria, t.decisions, t.implementation_plan, \
     t.execution_record, t.reproduction, t.root_cause, \
     t.context_refs, t.files, t.tags, t.history, t.created_at, t.updated_at, \
-    t.completed_at \
+    t.completed_at, t.arc_id, t.arc_phase \
     FROM tasks t JOIN projects p ON t.project_id = p.id";
 
 fn uuid_from_blob(row: &rusqlite::Row<'_>, col: &str) -> rusqlite::Result<Uuid> {
@@ -244,6 +298,14 @@ fn uuid_from_blob(row: &rusqlite::Row<'_>, col: &str) -> rusqlite::Result<Uuid> 
 }
 
 fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
+    let arc_id = row
+        .get::<_, Option<Vec<u8>>>("arc_id")?
+        .map(|bytes| {
+            Uuid::from_slice(&bytes).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
+            })
+        })
+        .transpose()?;
     Ok(TaskRow {
         id: uuid_from_blob(row, "id")?,
         project_id: uuid_from_blob(row, "project_id")?,
@@ -267,6 +329,8 @@ fn map_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         completed_at: row.get("completed_at")?,
+        arc_id,
+        arc_phase: row.get("arc_phase")?,
     })
 }
 
@@ -321,6 +385,145 @@ fn resolve_task(conn: &Connection, identifier: &str) -> Result<TaskRow, YojanaEr
         TaskIdentifier::SlugSeq(slug, seq) => get_task_by_slug_seq(conn, &slug, seq)?,
     };
     row.ok_or_else(|| YojanaError::NotFound(format!("task '{identifier}'")))
+}
+
+// --- Arc helpers ---
+
+const ARC_SELECT: &str = "\
+    SELECT a.id, a.project_id, p.slug AS project_slug, a.sequence_number, \
+    a.title, a.description, a.status, a.phases, a.tags, a.context_refs, \
+    a.history, a.created_at, a.updated_at \
+    FROM arcs a JOIN projects p ON a.project_id = p.id";
+
+fn map_arc_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArcRow> {
+    Ok(ArcRow {
+        id: uuid_from_blob(row, "id")?,
+        project_id: uuid_from_blob(row, "project_id")?,
+        project_slug: row.get("project_slug")?,
+        sequence_number: row.get("sequence_number")?,
+        title: row.get("title")?,
+        description: row.get("description")?,
+        status: row.get("status")?,
+        phases: row.get("phases")?,
+        tags: row.get("tags")?,
+        context_refs: row.get("context_refs")?,
+        history: row.get("history")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn get_arc_by_uuid(conn: &Connection, id: &Uuid) -> Result<Option<ArcRow>, YojanaError> {
+    let sql = format!("{ARC_SELECT} WHERE a.id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let row = stmt
+        .query_row(rusqlite::params![id.as_bytes().as_slice()], map_arc_row)
+        .optional()?;
+    Ok(row)
+}
+
+fn get_arc_by_slug_seq(
+    conn: &Connection,
+    slug: &str,
+    seq: i64,
+) -> Result<Option<ArcRow>, YojanaError> {
+    let sql = format!("{ARC_SELECT} WHERE p.slug = ?1 AND a.sequence_number = ?2");
+    let mut stmt = conn.prepare(&sql)?;
+    let row = stmt
+        .query_row(rusqlite::params![slug, seq], map_arc_row)
+        .optional()?;
+    Ok(row)
+}
+
+fn parse_arc_identifier(s: &str) -> Result<ArcIdentifier, YojanaError> {
+    if let Ok(uuid) = Uuid::parse_str(s) {
+        return Ok(ArcIdentifier::Uuid(uuid));
+    }
+    if let Some((slug, num_str)) = s.rsplit_once('/') {
+        if let Some(num_str) = num_str.strip_prefix('~') {
+            if let Ok(num) = num_str.parse::<i64>() {
+                return Ok(ArcIdentifier::SlugSeq(slug.to_string(), num));
+            }
+        }
+    }
+    Err(YojanaError::InvalidInput(format!(
+        "invalid arc identifier '{s}'; expected UUID or 'project-slug/~N'"
+    )))
+}
+
+fn next_arc_sequence_number(conn: &Connection, project_id: &Uuid) -> Result<i64, YojanaError> {
+    let mut stmt = conn
+        .prepare("SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM arcs WHERE project_id = ?1")?;
+    let seq: i64 = stmt.query_row(rusqlite::params![project_id.as_bytes().as_slice()], |row| {
+        row.get(0)
+    })?;
+    Ok(seq)
+}
+
+fn resolve_arc(conn: &Connection, identifier: &str) -> Result<ArcRow, YojanaError> {
+    let row = match parse_arc_identifier(identifier)? {
+        ArcIdentifier::Uuid(id) => get_arc_by_uuid(conn, &id)?,
+        ArcIdentifier::SlugSeq(slug, seq) => get_arc_by_slug_seq(conn, &slug, seq)?,
+    };
+    row.ok_or_else(|| YojanaError::NotFound(format!("arc '{identifier}'")))
+}
+
+fn validate_phases(phases: &[serde_json::Value]) -> Result<(), YojanaError> {
+    if phases.is_empty() {
+        return Err(YojanaError::InvalidInput(
+            "at least one phase required".into(),
+        ));
+    }
+    let mut names = std::collections::HashSet::new();
+    for phase in phases {
+        let name = phase
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| YojanaError::InvalidInput("phase must have a 'name' string".into()))?;
+        if !names.insert(name.to_string()) {
+            return Err(YojanaError::InvalidInput(format!(
+                "duplicate phase name '{name}'"
+            )));
+        }
+        if let Some(st) = phase.get("slice_type").and_then(|s| s.as_str()) {
+            if !["AFK", "HITL"].contains(&st) {
+                return Err(YojanaError::InvalidInput(format!(
+                    "invalid phase slice_type '{st}'; valid: AFK, HITL"
+                )));
+            }
+        }
+        if let Some(gate) = phase.get("gate").and_then(|g| g.as_str()) {
+            if !VALID_PHASE_GATES.contains(&gate) {
+                return Err(YojanaError::InvalidInput(format!(
+                    "invalid phase gate '{gate}'; valid: {}",
+                    VALID_PHASE_GATES.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_phase_defaults(phases: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    phases
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut phase = p.clone();
+            let obj = phase.as_object_mut().unwrap();
+            if !obj.contains_key("status") {
+                let status = if i == 0 { "active" } else { "pending" };
+                obj.insert("status".into(), serde_json::Value::String(status.into()));
+            }
+            if !obj.contains_key("gate") {
+                obj.insert(
+                    "gate".into(),
+                    serde_json::Value::String("manual".into()),
+                );
+            }
+            phase
+        })
+        .collect()
 }
 
 use rusqlite::OptionalExtension;
@@ -378,6 +581,7 @@ impl Db {
                 "0008_project_handoff",
                 include_str!("../migrations/0008_project-handoff.sql"),
             ),
+            ("0009_arcs", include_str!("../migrations/0009_arcs.sql")),
         ];
 
         let conn = self.conn.lock();
@@ -760,12 +964,14 @@ impl Db {
                 id, project_id, sequence_number, title, description, \
                 category, status, slice_type, acceptance_criteria, decisions, \
                 implementation_plan, execution_record, reproduction, root_cause, \
-                context_refs, files, tags, history, created_at, updated_at\
+                context_refs, files, tags, history, created_at, updated_at, \
+                arc_id, arc_phase\
             ) VALUES (\
                 ?1, ?2, ?3, ?4, ?5, \
                 ?6, ?7, ?8, ?9, ?10, \
                 ?11, ?12, ?13, ?14, \
-                ?15, ?16, ?17, ?18, ?19, ?19\
+                ?15, ?16, ?17, ?18, ?19, ?19, \
+                ?20, ?21\
             )",
             rusqlite::params![
                 id.as_bytes().as_slice(),
@@ -787,6 +993,8 @@ impl Db {
                 params.tags,
                 history,
                 now,
+                params.arc_id.map(|id| id.as_bytes().to_vec()),
+                params.arc_phase,
             ],
         )?;
 
@@ -884,6 +1092,14 @@ impl Db {
             .unwrap_or(&task.context_refs);
         let new_files = updates.files.as_deref().unwrap_or(&task.files);
         let new_tags = updates.tags.as_deref().unwrap_or(&task.tags);
+        let new_arc_id: Option<Uuid> = match &updates.arc_id {
+            None => task.arc_id,
+            Some(inner) => *inner,
+        };
+        let new_arc_phase: Option<&str> = match &updates.arc_phase {
+            None => task.arc_phase.as_deref(),
+            Some(inner) => inner.as_deref(),
+        };
         let history_json = serde_json::to_string(&history)?;
 
         conn.execute(
@@ -892,7 +1108,7 @@ impl Db {
                 acceptance_criteria=?6, decisions=?7, implementation_plan=?8, \
                 execution_record=?9, reproduction=?10, root_cause=?11, \
                 context_refs=?12, files=?13, tags=?14, history=?15, updated_at=?16, \
-                completed_at=?17 \
+                completed_at=?17, arc_id=?19, arc_phase=?20 \
             WHERE id=?18",
             rusqlite::params![
                 new_title,
@@ -913,11 +1129,157 @@ impl Db {
                 now,
                 new_completed_at,
                 task.id.as_bytes().as_slice(),
+                new_arc_id.map(|id| id.as_bytes().to_vec()),
+                new_arc_phase,
             ],
         )?;
 
         get_task_by_uuid(&conn, &task.id)?
             .ok_or_else(|| YojanaError::NotFound("updated task".into()))
+    }
+
+    // --- Arc methods ---
+
+    pub fn create_arc(&self, params: CreateArcParams) -> Result<ArcRow, YojanaError> {
+        let conn = self.conn.lock();
+        let id = Uuid::now_v7();
+        let now = chrono::Utc::now().timestamp_millis();
+        let seq = next_arc_sequence_number(&conn, &params.project_id)?;
+        let history = serde_json::to_string(&vec![HistoryEntry {
+            ts: now,
+            kind: "arc_created".into(),
+            payload: serde_json::json!({"sequence_number": seq, "project": params.project_slug}),
+        }])?;
+
+        conn.execute(
+            "INSERT INTO arcs (\
+                id, project_id, sequence_number, title, description, \
+                status, phases, tags, context_refs, history, \
+                created_at, updated_at\
+            ) VALUES (\
+                ?1, ?2, ?3, ?4, ?5, \
+                ?6, ?7, ?8, ?9, ?10, \
+                ?11, ?11\
+            )",
+            rusqlite::params![
+                id.as_bytes().as_slice(),
+                params.project_id.as_bytes().as_slice(),
+                seq,
+                params.title,
+                params.description,
+                "active",
+                params.phases,
+                params.tags,
+                params.context_refs,
+                history,
+                now,
+            ],
+        )?;
+
+        get_arc_by_uuid(&conn, &id)?
+            .ok_or_else(|| YojanaError::NotFound("just-created arc".into()))
+    }
+
+    pub fn get_arc(&self, identifier: &str) -> Result<Option<ArcRow>, YojanaError> {
+        let conn = self.conn.lock();
+        match parse_arc_identifier(identifier)? {
+            ArcIdentifier::Uuid(id) => get_arc_by_uuid(&conn, &id),
+            ArcIdentifier::SlugSeq(slug, seq) => get_arc_by_slug_seq(&conn, &slug, seq),
+        }
+    }
+
+    pub fn update_arc(
+        &self,
+        identifier: &str,
+        updates: ArcUpdates,
+    ) -> Result<ArcRow, YojanaError> {
+        let conn = self.conn.lock();
+        let arc = resolve_arc(&conn, identifier)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
+
+        if let Some(ref new_status) = updates.status {
+            if new_status != &arc.status {
+                if !VALID_ARC_STATUSES.contains(&new_status.as_str()) {
+                    return Err(YojanaError::InvalidInput(format!(
+                        "invalid arc status '{new_status}'; valid: {}",
+                        VALID_ARC_STATUSES.join(", ")
+                    )));
+                }
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "status_changed".into(),
+                    payload: serde_json::json!({"from": arc.status, "to": new_status}),
+                });
+            }
+        }
+        if let Some(ref new_title) = updates.title {
+            if new_title != &arc.title {
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "updated".into(),
+                    payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
+                });
+            }
+        }
+
+        let new_title = updates.title.as_deref().unwrap_or(&arc.title);
+        let new_desc = updates.description.as_deref().unwrap_or(&arc.description);
+        let new_status = updates.status.as_deref().unwrap_or(&arc.status);
+        let new_tags = updates.tags.as_deref().unwrap_or(&arc.tags);
+        let new_refs = updates.context_refs.as_deref().unwrap_or(&arc.context_refs);
+        let history_json = serde_json::to_string(&history)?;
+
+        conn.execute(
+            "UPDATE arcs SET \
+                title=?1, description=?2, status=?3, tags=?4, \
+                context_refs=?5, history=?6, updated_at=?7 \
+            WHERE id=?8",
+            rusqlite::params![
+                new_title,
+                new_desc,
+                new_status,
+                new_tags,
+                new_refs,
+                history_json,
+                now,
+                arc.id.as_bytes().as_slice(),
+            ],
+        )?;
+
+        get_arc_by_uuid(&conn, &arc.id)?
+            .ok_or_else(|| YojanaError::NotFound("updated arc".into()))
+    }
+
+    pub fn validate_task_arc(
+        &self,
+        arc_id: &Uuid,
+        arc_phase: &str,
+    ) -> Result<(), YojanaError> {
+        let conn = self.conn.lock();
+        let arc = get_arc_by_uuid(&conn, arc_id)?
+            .ok_or_else(|| YojanaError::NotFound(format!("arc '{arc_id}'")))?;
+        let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
+        let valid = phases
+            .iter()
+            .any(|p| p.get("name").and_then(|n| n.as_str()) == Some(arc_phase));
+        if !valid {
+            let names: Vec<&str> = phases
+                .iter()
+                .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
+                .collect();
+            return Err(YojanaError::InvalidInput(format!(
+                "unknown phase '{arc_phase}'; valid: {}",
+                names.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn resolve_arc_id(&self, identifier: &str) -> Result<Uuid, YojanaError> {
+        let conn = self.conn.lock();
+        let arc = resolve_arc(&conn, identifier)?;
+        Ok(arc.id)
     }
 
     // --- Query methods ---
@@ -961,6 +1323,10 @@ impl Db {
                 "EXISTS (SELECT 1 FROM json_each(t.tags) WHERE json_each.value = ?{})",
                 params.len()
             ));
+        }
+        if let Some(ref arc_id) = filter.arc_id {
+            params.push(Box::new(arc_id.as_bytes().to_vec()));
+            conditions.push(format!("t.arc_id = ?{}", params.len()));
         }
         if let Some(cutoff) = filter.include_terminal_after {
             let terminal_list = TERMINAL_STATUSES
@@ -1386,6 +1752,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+            arc_id: None,
+            arc_phase: None,
         })
         .unwrap()
     }
@@ -1430,6 +1798,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
+            arc_id: None,
+            arc_phase: None,
             })
             .unwrap();
         assert_eq!(t.status, "ready-for-agent");
@@ -1454,6 +1824,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+        arc_id: None,
+        arc_phase: None,
         });
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains("unknown status"));
@@ -1552,6 +1924,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
+            arc_id: None,
+            arc_phase: None,
             })
             .unwrap();
 
@@ -1991,6 +2365,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+        arc_id: None,
+        arc_phase: None,
         })
         .unwrap();
         create_test_task(&db, "proj", "Untagged");
@@ -2223,6 +2599,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+        arc_id: None,
+        arc_phase: None,
         })
         .unwrap();
 
@@ -2266,6 +2644,8 @@ mod tests {
                 execution_record: None,
                 reproduction: None,
                 root_cause: None,
+            arc_id: None,
+            arc_phase: None,
             })
             .unwrap();
         assert_eq!(t.category.as_deref(), Some("bug"));
@@ -2491,6 +2871,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+        arc_id: None,
+        arc_phase: None,
         })
         .unwrap();
 
@@ -2538,6 +2920,8 @@ mod tests {
             execution_record: None,
             reproduction: None,
             root_cause: None,
+        arc_id: None,
+        arc_phase: None,
         })
         .unwrap();
 

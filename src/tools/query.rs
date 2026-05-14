@@ -117,6 +117,7 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         limit: args.limit,
         offset: args.offset,
         include_terminal_after: cutoff,
+        arc_id: None,
     };
 
     let tasks = db.list_tasks(&filter)?;

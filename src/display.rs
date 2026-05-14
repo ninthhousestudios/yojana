@@ -355,6 +355,8 @@ mod tests {
             created_at: 1700000000000,
             updated_at: 1700000060000,
             completed_at: None,
+            arc_id: None,
+            arc_phase: None,
         }
     }
 
