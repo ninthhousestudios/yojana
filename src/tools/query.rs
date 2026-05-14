@@ -110,7 +110,7 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
     let arc_id = args
         .arc
         .as_deref()
-        .map(|a| db.resolve_arc_id(a))
+        .map(|a| db.resolve_arc_id(a).map(|(id, _)| id))
         .transpose()?;
 
     let cutoff = if args.include_all_terminal || args.status.is_some() {

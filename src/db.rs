@@ -504,6 +504,14 @@ fn validate_phases(phases: &[serde_json::Value]) -> Result<(), YojanaError> {
                 )));
             }
         }
+        if let Some(status) = phase.get("status").and_then(|s| s.as_str()) {
+            if !VALID_PHASE_STATUSES.contains(&status) {
+                return Err(YojanaError::InvalidInput(format!(
+                    "invalid phase status '{status}'; valid: {}",
+                    VALID_PHASE_STATUSES.join(", ")
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -1223,6 +1231,33 @@ impl Db {
                 });
             }
         }
+        if let Some(ref new_desc) = updates.description {
+            if new_desc != &arc.description {
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "updated".into(),
+                    payload: serde_json::json!({"field": "description"}),
+                });
+            }
+        }
+        if let Some(ref new_tags) = updates.tags {
+            if new_tags != &arc.tags {
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "updated".into(),
+                    payload: serde_json::json!({"field": "tags"}),
+                });
+            }
+        }
+        if let Some(ref new_refs) = updates.context_refs {
+            if new_refs != &arc.context_refs {
+                history.push(HistoryEntry {
+                    ts: now,
+                    kind: "updated".into(),
+                    payload: serde_json::json!({"field": "context_refs"}),
+                });
+            }
+        }
 
         let new_title = updates.title.as_deref().unwrap_or(&arc.title);
         let new_desc = updates.description.as_deref().unwrap_or(&arc.description);
@@ -1272,10 +1307,10 @@ impl Db {
         Ok(())
     }
 
-    pub fn resolve_arc_id(&self, identifier: &str) -> Result<Uuid, YojanaError> {
+    pub fn resolve_arc_id(&self, identifier: &str) -> Result<(Uuid, Uuid), YojanaError> {
         let conn = self.conn.lock();
         let arc = resolve_arc(&conn, identifier)?;
-        Ok(arc.id)
+        Ok((arc.id, arc.project_id))
     }
 
     // --- Query methods ---

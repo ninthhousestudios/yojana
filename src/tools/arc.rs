@@ -355,4 +355,225 @@ mod tests {
         assert_eq!(task["arc_id"], arc["id"]);
         assert_eq!(task["arc_phase"], "design");
     }
+
+    #[test]
+    fn task_create_rejects_cross_project_arc() {
+        let db = test_db();
+        db.create_project("other", "Other Project", "", None)
+            .unwrap();
+        create_arc(&db); // arc in "proj"
+
+        let err = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("other".into()),
+                title: Some("Cross-project".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: Some("proj/~1".into()),
+                arc_phase: Some("design".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("different project"));
+    }
+
+    #[test]
+    fn task_update_rejects_cross_project_arc() {
+        let db = test_db();
+        db.create_project("other", "Other Project", "", None)
+            .unwrap();
+        create_arc(&db); // arc in "proj"
+
+        let task = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("other".into()),
+                title: Some("Other task".into()),
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+        )
+        .unwrap();
+        let task_id = task["human_id"].as_str().unwrap().to_string();
+
+        let err = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "update".into(),
+                id: Some(task_id),
+                project: None,
+                title: None,
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: Some("proj/~1".into()),
+                arc_phase: Some("design".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("different project"));
+    }
+
+    #[test]
+    fn arc_update_records_description_history() {
+        let db = test_db();
+        create_arc(&db);
+
+        let updated = handle(
+            &db,
+            ArcArgs {
+                action: "update".into(),
+                id: Some("proj/~1".into()),
+                project: None,
+                title: None,
+                description: Some("New description".into()),
+                status: None,
+                phases: None,
+                tags: None,
+                context_refs: None,
+            },
+        )
+        .unwrap();
+        let history = updated["history"].as_array().unwrap();
+        let desc_entry = history
+            .iter()
+            .find(|e| {
+                e["kind"] == "updated"
+                    && e["payload"]["field"] == "description"
+            });
+        assert!(desc_entry.is_some());
+    }
+
+    #[test]
+    fn arc_update_records_tags_history() {
+        let db = test_db();
+        create_arc(&db);
+
+        let updated = handle(
+            &db,
+            ArcArgs {
+                action: "update".into(),
+                id: Some("proj/~1".into()),
+                project: None,
+                title: None,
+                description: None,
+                status: None,
+                phases: None,
+                tags: Some(vec!["new-tag".into()]),
+                context_refs: None,
+            },
+        )
+        .unwrap();
+        let history = updated["history"].as_array().unwrap();
+        let tags_entry = history
+            .iter()
+            .find(|e| {
+                e["kind"] == "updated" && e["payload"]["field"] == "tags"
+            });
+        assert!(tags_entry.is_some());
+    }
+
+    #[test]
+    fn arc_update_records_context_refs_history() {
+        let db = test_db();
+        create_arc(&db);
+
+        let updated = handle(
+            &db,
+            ArcArgs {
+                action: "update".into(),
+                id: Some("proj/~1".into()),
+                project: None,
+                title: None,
+                description: None,
+                status: None,
+                phases: None,
+                tags: None,
+                context_refs: Some(vec![
+                    serde_json::json!({"type": "doc:path", "value": "foo.md"}),
+                ]),
+            },
+        )
+        .unwrap();
+        let history = updated["history"].as_array().unwrap();
+        let refs_entry = history
+            .iter()
+            .find(|e| {
+                e["kind"] == "updated"
+                    && e["payload"]["field"] == "context_refs"
+            });
+        assert!(refs_entry.is_some());
+    }
+
+    #[test]
+    fn arc_create_rejects_invalid_phase_status() {
+        let db = test_db();
+
+        let err = handle(
+            &db,
+            ArcArgs {
+                action: "create".into(),
+                id: None,
+                project: Some("proj".into()),
+                title: Some("Bad Arc".into()),
+                description: None,
+                status: None,
+                phases: Some(vec![
+                    serde_json::json!({"name": "design", "status": "bogus"}),
+                ]),
+                tags: None,
+                context_refs: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid phase status"));
+    }
 }

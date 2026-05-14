@@ -204,6 +204,7 @@ fn resolve_arc_assignment(
     db: &Db,
     arc_id: Option<&str>,
     arc_phase: Option<&str>,
+    project_id: &Uuid,
 ) -> Result<(Option<Uuid>, Option<String>), YojanaError> {
     match (arc_id, arc_phase) {
         (None, None) => Ok((None, None)),
@@ -214,7 +215,12 @@ fn resolve_arc_assignment(
             "arc_id required when arc_phase is provided".into(),
         )),
         (Some(arc_str), Some(phase)) => {
-            let uuid = db.resolve_arc_id(arc_str)?;
+            let (uuid, arc_project_id) = db.resolve_arc_id(arc_str)?;
+            if arc_project_id != *project_id {
+                return Err(YojanaError::InvalidInput(
+                    "arc belongs to a different project than the task".into(),
+                ));
+            }
             db.validate_task_arc(&uuid, phase)?;
             Ok((Some(uuid), Some(phase.to_string())))
         }
@@ -250,10 +256,13 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
             validate_context_refs(refs)?;
-            let (arc_uuid, arc_phase) =
-                resolve_arc_assignment(db, args.arc_id.as_deref(), args.arc_phase.as_deref())?;
-
             let (project_id, project_slug) = resolve_project(db, project)?;
+            let (arc_uuid, arc_phase) = resolve_arc_assignment(
+                db,
+                args.arc_id.as_deref(),
+                args.arc_phase.as_deref(),
+                &project_id,
+            )?;
 
             let params = CreateTaskParams {
                 project_id,
@@ -319,7 +328,15 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                         ));
                     }
                     (Some(arc_str), Some(phase)) => {
-                        let uuid = db.resolve_arc_id(arc_str)?;
+                        let (uuid, arc_project_id) = db.resolve_arc_id(arc_str)?;
+                        let task_row = db
+                            .get_task(id)?
+                            .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
+                        if arc_project_id != task_row.project_id {
+                            return Err(YojanaError::InvalidInput(
+                                "arc belongs to a different project than the task".into(),
+                            ));
+                        }
                         db.validate_task_arc(&uuid, phase)?;
                         (Some(Some(uuid)), Some(Some(phase.to_string())))
                     }
