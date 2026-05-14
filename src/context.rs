@@ -5,7 +5,14 @@ use uuid::Uuid;
 
 use crate::db::{EdgeRow, HistoryEntry, TaskRow};
 
-pub const VALID_SHAPES: &[&str] = &["summary", "working", "review"];
+pub const VALID_SHAPES: &[&str] = &["summary", "working", "planning", "agent", "review"];
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ArcInfo {
+    pub arc_title: String,
+    pub current_phase: String,
+    pub phase_position: String,
+}
 
 #[derive(Debug, Serialize)]
 pub struct SummaryBundle {
@@ -28,6 +35,8 @@ pub struct WorkingBundle {
     pub neighbors: Vec<SummaryBundle>,
     pub recent_messages: Vec<serde_json::Value>,
     pub context_refs: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_info: Option<ArcInfo>,
 }
 
 fn human_id(task: &TaskRow) -> String {
@@ -88,6 +97,7 @@ pub fn working(
     neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)],
     messages: &[serde_json::Value],
     max_messages: usize,
+    arc_info: Option<ArcInfo>,
 ) -> WorkingBundle {
     let neighbor_summaries: Vec<SummaryBundle> = neighbors_with_edges
         .iter()
@@ -108,6 +118,116 @@ pub fn working(
         neighbors: neighbor_summaries,
         recent_messages: recent,
         context_refs: json_array(&task.context_refs),
+        arc_info,
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PlanningBundle {
+    pub shape: &'static str,
+    pub human_id: String,
+    pub acceptance_criteria: Vec<serde_json::Value>,
+    pub decisions: Vec<serde_json::Value>,
+    pub neighbors: Vec<SummaryBundle>,
+    pub recent_messages: Vec<serde_json::Value>,
+    pub context_refs: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_info: Option<ArcInfo>,
+    pub prior_phase_decisions: Vec<serde_json::Value>,
+    pub prior_phase_execution_records: Vec<serde_json::Value>,
+}
+
+pub fn planning(
+    task: &TaskRow,
+    neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)],
+    messages: &[serde_json::Value],
+    max_messages: usize,
+    arc_info: Option<ArcInfo>,
+    prior_phase_tasks: &[TaskRow],
+) -> PlanningBundle {
+    let neighbor_summaries: Vec<SummaryBundle> = neighbors_with_edges
+        .iter()
+        .map(|(t, e)| summary(t, e))
+        .collect();
+
+    let recent: Vec<serde_json::Value> = if messages.len() > max_messages {
+        messages[messages.len() - max_messages..].to_vec()
+    } else {
+        messages.to_vec()
+    };
+
+    let mut prior_decisions = Vec::new();
+    let mut prior_records = Vec::new();
+    for t in prior_phase_tasks {
+        for d in json_array(&t.decisions) {
+            prior_decisions.push(d);
+        }
+        if let Some(ref record) = t.execution_record {
+            prior_records.push(serde_json::json!({
+                "task": human_id(t),
+                "phase": t.arc_phase.as_deref().unwrap_or(""),
+                "record": record,
+            }));
+        }
+    }
+
+    PlanningBundle {
+        shape: "planning",
+        human_id: human_id(task),
+        acceptance_criteria: json_array(&task.acceptance_criteria),
+        decisions: json_array(&task.decisions),
+        neighbors: neighbor_summaries,
+        recent_messages: recent,
+        context_refs: json_array(&task.context_refs),
+        arc_info,
+        prior_phase_decisions: prior_decisions,
+        prior_phase_execution_records: prior_records,
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentBundle {
+    pub shape: &'static str,
+    pub human_id: String,
+    pub acceptance_criteria: Vec<serde_json::Value>,
+    pub decisions: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementation_plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_info: Option<ArcInfo>,
+    pub prior_phase_decisions: Vec<serde_json::Value>,
+    pub prior_phase_execution_records: Vec<serde_json::Value>,
+}
+
+pub fn agent(
+    task: &TaskRow,
+    arc_info: Option<ArcInfo>,
+    prior_phase_tasks: &[TaskRow],
+) -> AgentBundle {
+    let mut prior_decisions = Vec::new();
+    let mut prior_records = Vec::new();
+    for t in prior_phase_tasks {
+        for d in json_array(&t.decisions) {
+            prior_decisions.push(d);
+        }
+        if let Some(ref record) = t.execution_record {
+            prior_records.push(serde_json::json!({
+                "task": human_id(t),
+                "phase": t.arc_phase.as_deref().unwrap_or(""),
+                "record": record,
+            }));
+        }
+    }
+
+    AgentBundle {
+        shape: "agent",
+        human_id: human_id(task),
+        acceptance_criteria: json_array(&task.acceptance_criteria),
+        decisions: json_array(&task.decisions),
+        implementation_plan: task.implementation_plan.clone(),
+        arc_info,
+        prior_phase_decisions: prior_decisions,
+        prior_phase_execution_records: prior_records,
     }
 }
 
@@ -160,6 +280,97 @@ pub fn review(task: &TaskRow, neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)]) 
         other_refs,
         neighbors: neighbor_summaries,
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ArcSummaryBundle {
+    pub shape: &'static str,
+    pub human_id: String,
+    pub title: String,
+    pub status: String,
+    pub phases: Vec<serde_json::Value>,
+    pub cross_arc_blockers: Vec<serde_json::Value>,
+}
+
+pub fn arc_summary(
+    human_id: &str,
+    title: &str,
+    status: &str,
+    phases: &[serde_json::Value],
+    arc_tasks: &[TaskRow],
+    cross_arc_blockers: &[serde_json::Value],
+) -> ArcSummaryBundle {
+    let enriched_phases: Vec<serde_json::Value> = phases
+        .iter()
+        .map(|phase| {
+            let phase_name = phase.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let phase_status = phase
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("pending");
+
+            let phase_tasks: Vec<&TaskRow> = arc_tasks
+                .iter()
+                .filter(|t| t.arc_phase.as_deref() == Some(phase_name))
+                .collect();
+            let total = phase_tasks.len();
+            let done = phase_tasks
+                .iter()
+                .filter(|t| t.status == "done" || t.status == "wontfix")
+                .count();
+
+            serde_json::json!({
+                "name": phase_name,
+                "status": phase_status,
+                "done_count": done,
+                "total_count": total,
+            })
+        })
+        .collect();
+
+    ArcSummaryBundle {
+        shape: "arc_summary",
+        human_id: human_id.to_string(),
+        title: title.to_string(),
+        status: status.to_string(),
+        phases: enriched_phases,
+        cross_arc_blockers: cross_arc_blockers.to_vec(),
+    }
+}
+
+pub fn find_cross_arc_blockers(
+    arc_tasks: &[TaskRow],
+    external_tasks: &[TaskRow],
+    edges: &[EdgeRow],
+) -> Vec<serde_json::Value> {
+    let arc_task_ids: Vec<Uuid> = arc_tasks.iter().map(|t| t.id).collect();
+    let terminal = ["done", "wontfix"];
+
+    let mut blockers = Vec::new();
+    for edge in edges {
+        if edge.edge_type != "depends_on" {
+            continue;
+        }
+        if !arc_task_ids.contains(&edge.source_task_id) {
+            continue;
+        }
+        if arc_task_ids.contains(&edge.target_task_id) {
+            continue;
+        }
+        if let Some(ext) = external_tasks
+            .iter()
+            .find(|t| t.id == edge.target_task_id)
+            .filter(|t| !terminal.contains(&t.status.as_str()))
+        {
+            let blocked = arc_tasks.iter().find(|t| t.id == edge.source_task_id);
+            blockers.push(serde_json::json!({
+                "blocker_task": human_id(ext),
+                "blocker_status": ext.status,
+                "blocked_task": blocked.map(human_id).unwrap_or_default(),
+            }));
+        }
+    }
+    blockers
 }
 
 pub fn neighbor_ids(task_id: Uuid, edges: &[EdgeRow]) -> Vec<Uuid> {
@@ -261,7 +472,7 @@ mod tests {
             serde_json::json!({"ts": 2000, "text": "world"}),
         ];
 
-        let bundle = working(&task, &[(neighbor, neighbor_edges)], &messages, 10);
+        let bundle = working(&task, &[(neighbor, neighbor_edges)], &messages, 10, None);
         assert_eq!(bundle.shape, "working");
         assert_eq!(bundle.human_id, "proj/1");
         assert_eq!(bundle.acceptance_criteria.len(), 1);
@@ -279,9 +490,198 @@ mod tests {
             .map(|i| serde_json::json!({"ts": i, "text": format!("msg {i}")}))
             .collect();
 
-        let bundle = working(&task, &[], &messages, 5);
+        let bundle = working(&task, &[], &messages, 5, None);
         assert_eq!(bundle.recent_messages.len(), 5);
         assert_eq!(bundle.recent_messages[0]["ts"], 15);
+    }
+
+    #[test]
+    fn working_shape_includes_arc_info() {
+        let mut task = make_task(1, "proj", 1);
+        task.arc_id = Some(Uuid::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99,
+        ]));
+        task.arc_phase = Some("implement".into());
+
+        let arc_info = ArcInfo {
+            arc_title: "Test Arc".into(),
+            current_phase: "implement".into(),
+            phase_position: "phase 2 of 3".into(),
+        };
+
+        let bundle = working(&task, &[], &[], 10, Some(arc_info));
+        assert_eq!(bundle.shape, "working");
+        let arc = bundle.arc_info.as_ref().unwrap();
+        assert_eq!(arc.arc_title, "Test Arc");
+        assert_eq!(arc.current_phase, "implement");
+        assert_eq!(arc.phase_position, "phase 2 of 3");
+    }
+
+    #[test]
+    fn planning_shape_includes_prior_phase_context() {
+        let mut task = make_task(1, "proj", 1);
+        task.arc_id = Some(Uuid::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99,
+        ]));
+        task.arc_phase = Some("implement".into());
+
+        let arc_info = ArcInfo {
+            arc_title: "Test Arc".into(),
+            current_phase: "implement".into(),
+            phase_position: "phase 2 of 3".into(),
+        };
+
+        let mut prior_task = make_task(2, "proj", 2);
+        prior_task.arc_phase = Some("design".into());
+        prior_task.decisions = r#"[{"text":"use REST not gRPC"}]"#.into();
+        prior_task.execution_record = Some("designed the API schema".into());
+
+        let bundle = planning(&task, &[], &[], 10, Some(arc_info), &[prior_task]);
+        assert_eq!(bundle.shape, "planning");
+        assert!(bundle.arc_info.is_some());
+        assert_eq!(bundle.prior_phase_decisions.len(), 1);
+        assert_eq!(bundle.prior_phase_decisions[0]["text"], "use REST not gRPC");
+        assert_eq!(bundle.prior_phase_execution_records.len(), 1);
+        assert_eq!(bundle.prior_phase_execution_records[0]["task"], "proj/2");
+        assert_eq!(bundle.prior_phase_execution_records[0]["phase"], "design");
+        assert_eq!(
+            bundle.prior_phase_execution_records[0]["record"],
+            "designed the API schema"
+        );
+    }
+
+    #[test]
+    fn agent_shape_includes_arc_position_and_prior_context() {
+        let mut task = make_task(1, "proj", 1);
+        task.arc_id = Some(Uuid::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99,
+        ]));
+        task.arc_phase = Some("implement".into());
+
+        let arc_info = ArcInfo {
+            arc_title: "Test Arc".into(),
+            current_phase: "implement".into(),
+            phase_position: "phase 2 of 3".into(),
+        };
+
+        let mut prior_task = make_task(2, "proj", 2);
+        prior_task.arc_phase = Some("design".into());
+        prior_task.decisions = r#"[{"text":"use REST"}]"#.into();
+        prior_task.execution_record = Some("API schema done".into());
+
+        let bundle = agent(&task, Some(arc_info.clone()), &[prior_task]);
+        assert_eq!(bundle.shape, "agent");
+        let arc = bundle.arc_info.as_ref().unwrap();
+        assert_eq!(arc.arc_title, "Test Arc");
+        assert_eq!(arc.phase_position, "phase 2 of 3");
+        assert_eq!(bundle.acceptance_criteria.len(), 1);
+        assert_eq!(bundle.prior_phase_decisions.len(), 1);
+        assert_eq!(bundle.prior_phase_execution_records.len(), 1);
+    }
+
+    #[test]
+    fn cross_arc_blockers_from_edges() {
+        let mut arc_task = make_task(1, "proj", 1);
+        arc_task.arc_id = Some(Uuid::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99,
+        ]));
+        arc_task.arc_phase = Some("implement".into());
+
+        let mut external_task = make_task(2, "proj", 2);
+        external_task.status = "in-progress".into();
+
+        let edges = vec![make_edge(1, 2, "depends_on")];
+
+        let blockers = find_cross_arc_blockers(&[arc_task], &[external_task], &edges);
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0]["blocker_task"], "proj/2");
+        assert_eq!(blockers[0]["blocker_status"], "in-progress");
+        assert_eq!(blockers[0]["blocked_task"], "proj/1");
+    }
+
+    #[test]
+    fn cross_arc_blockers_ignores_done_externals() {
+        let mut arc_task = make_task(1, "proj", 1);
+        arc_task.arc_id = Some(Uuid::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99,
+        ]));
+
+        let mut external_task = make_task(2, "proj", 2);
+        external_task.status = "done".into();
+
+        let edges = vec![make_edge(1, 2, "depends_on")];
+        let blockers = find_cross_arc_blockers(&[arc_task], &[external_task], &edges);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn arc_summary_returns_phases_with_task_counts() {
+        let phases = vec![
+            serde_json::json!({"name": "design", "status": "completed"}),
+            serde_json::json!({"name": "implement", "status": "active"}),
+            serde_json::json!({"name": "review", "status": "pending"}),
+        ];
+
+        let mut t1 = make_task(1, "proj", 1);
+        t1.arc_phase = Some("design".into());
+        t1.status = "done".into();
+
+        let mut t2 = make_task(2, "proj", 2);
+        t2.arc_phase = Some("implement".into());
+        t2.status = "in-progress".into();
+
+        let mut t3 = make_task(3, "proj", 3);
+        t3.arc_phase = Some("implement".into());
+        t3.status = "done".into();
+
+        let bundle = arc_summary("proj/~1", "Test Arc", "active", &phases, &[t1, t2, t3], &[]);
+        assert_eq!(bundle.shape, "arc_summary");
+        assert_eq!(bundle.human_id, "proj/~1");
+        assert_eq!(bundle.title, "Test Arc");
+        assert_eq!(bundle.status, "active");
+        assert_eq!(bundle.phases.len(), 3);
+
+        assert_eq!(bundle.phases[0]["name"], "design");
+        assert_eq!(bundle.phases[0]["done_count"], 1);
+        assert_eq!(bundle.phases[0]["total_count"], 1);
+
+        assert_eq!(bundle.phases[1]["name"], "implement");
+        assert_eq!(bundle.phases[1]["done_count"], 1);
+        assert_eq!(bundle.phases[1]["total_count"], 2);
+
+        assert_eq!(bundle.phases[2]["name"], "review");
+        assert_eq!(bundle.phases[2]["total_count"], 0);
+    }
+
+    #[test]
+    fn agent_shape_minimal_without_arc() {
+        let task = make_task(1, "proj", 1);
+        let bundle = agent(&task, None, &[]);
+        assert_eq!(bundle.shape, "agent");
+        assert!(bundle.arc_info.is_none());
+        assert!(bundle.prior_phase_decisions.is_empty());
+        assert!(bundle.prior_phase_execution_records.is_empty());
+    }
+
+    #[test]
+    fn planning_shape_skips_tasks_without_execution_record() {
+        let task = make_task(1, "proj", 1);
+
+        let mut prior_task = make_task(2, "proj", 2);
+        prior_task.arc_phase = Some("design".into());
+        prior_task.execution_record = None;
+        prior_task.decisions = "[]".into();
+
+        let bundle = planning(&task, &[], &[], 10, None, &[prior_task]);
+        assert_eq!(bundle.prior_phase_decisions.len(), 0);
+        assert_eq!(bundle.prior_phase_execution_records.len(), 0);
+    }
+
+    #[test]
+    fn working_shape_no_arc_info_when_no_arc() {
+        let task = make_task(1, "proj", 1);
+        let bundle = working(&task, &[], &[], 10, None);
+        assert!(bundle.arc_info.is_none());
     }
 
     #[test]

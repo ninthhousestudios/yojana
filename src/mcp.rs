@@ -113,7 +113,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Get a context bundle for a task. Shapes: 'summary' (title, status, slice_type, category, edge counts, last history entry), 'working' (acceptance_criteria, decisions, 1-hop neighbor summaries, recent conversation messages, context_refs), 'review' (description, acceptance_criteria, decisions, implementation_plan, git/doc refs separated, neighbor summaries). Requires: task (UUID or 'project-slug/N'), shape."
+        description = "Get a context bundle for a task or arc. Shapes: 'summary' (title, status, slice_type, category, edge counts, last history entry), 'working' (acceptance_criteria, decisions, 1-hop neighbor summaries, recent conversation messages, context_refs; includes arc info when task belongs to an arc), 'planning' (like working + prior-phase decisions and execution_records from the same arc), 'agent' (acceptance_criteria, decisions, implementation_plan, arc position, prior-phase context — slim shape for agent execution), 'review' (description, acceptance_criteria, decisions, implementation_plan, git/doc refs separated, neighbor summaries). Requires: task (UUID or 'project-slug/N'), shape. For arc-level summary: arc (UUID or 'project-slug/~N'), shape='summary'."
     )]
     pub async fn yojana_context(
         &self,

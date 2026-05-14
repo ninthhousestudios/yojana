@@ -2743,7 +2743,7 @@ mod tests {
         }
 
         let messages = db.get_conversation_messages(&t1.id).unwrap();
-        let bundle = crate::context::working(&t1, &neighbors_with_edges, &messages, 10);
+        let bundle = crate::context::working(&t1, &neighbors_with_edges, &messages, 10, None);
 
         assert_eq!(bundle.human_id, "proj/1");
         assert_eq!(bundle.neighbors.len(), 1);

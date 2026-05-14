@@ -151,7 +151,7 @@ fn full_flow_v0() {
     }
 
     let c_messages = db.get_conversation_messages(&task_c.id).unwrap();
-    let working_c = context::working(&task_c, &neighbors_with_edges, &c_messages, 10);
+    let working_c = context::working(&task_c, &neighbors_with_edges, &c_messages, 10, None);
     assert_eq!(working_c.human_id, "yojana/3");
     assert_eq!(working_c.neighbors.len(), 1);
     assert_eq!(working_c.neighbors[0].human_id, "yojana/2");
@@ -170,7 +170,7 @@ fn full_flow_v0() {
         b_neighbors.push((ntask, nedges));
     }
     let b_messages = db.get_conversation_messages(&task_b.id).unwrap();
-    let working_b = context::working(&task_b, &b_neighbors, &b_messages, 10);
+    let working_b = context::working(&task_b, &b_neighbors, &b_messages, 10, None);
     assert_eq!(working_b.recent_messages.len(), 1);
     assert_eq!(
         working_b.recent_messages[0]["text"],
