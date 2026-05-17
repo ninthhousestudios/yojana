@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 description = "Local task graph for the manas ecosystem"
 license = "AGPL-3.0"
-repository = "https://github.com/ninthhousestudios/manas"
+repository = "https://github.com/ninthhousestudios/yojana"
 
 [dependencies]
 anyhow = "1"
