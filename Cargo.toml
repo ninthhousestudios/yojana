@@ -3,7 +3,7 @@ name = "yojana"
 version = "0.3.0"
 edition = "2024"
 description = "Local task graph for the manas ecosystem"
-license = "MPL-2.0"
+license = "AGPL-3.0"
 repository = "https://github.com/ninthhousestudios/manas"
 
 [dependencies]
