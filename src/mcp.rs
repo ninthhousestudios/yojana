@@ -47,7 +47,7 @@ impl Clone for YojanaServer {
 #[tool_router(router = tool_router)]
 impl YojanaServer {
     #[tool(
-        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, handoff, history), list (returns slim rows: id, slug, title, status, parent_id, has_handoff, child_count, timestamps — all projects flat by default; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — supports handoff: set a string to write, empty string to clear)."
+        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, handoff, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, has_handoff, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — supports handoff: set a string to write, empty string to clear)."
     )]
     pub async fn yojana_project(
         &self,

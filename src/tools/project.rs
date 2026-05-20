@@ -33,6 +33,9 @@ pub struct ProjectArgs {
     /// Handoff note (for update). Set to write; set to empty string to clear.
     #[serde(default)]
     pub handoff: Option<String>,
+    /// If false, list returns full rows (id, status, parent_id, has_handoff, child_count, timestamps). Default: true (slug + title only).
+    #[serde(default)]
+    pub compact: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +66,12 @@ pub struct ProjectListItem {
     pub child_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectCompactItem {
+    pub slug: String,
+    pub title: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,7 +215,18 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
             };
             let parent_ref = parent_filter.as_ref().map(|o| o.as_ref());
             let rows = db.list_projects_slim(args.status.as_deref(), parent_ref)?;
-            Ok(serde_json::to_value(rows)?)
+            if args.compact == Some(false) {
+                Ok(serde_json::to_value(rows)?)
+            } else {
+                let compact: Vec<ProjectCompactItem> = rows
+                    .into_iter()
+                    .map(|r| ProjectCompactItem {
+                        slug: r.slug,
+                        title: r.title,
+                    })
+                    .collect();
+                Ok(serde_json::to_value(compact)?)
+            }
         }
         "update" => {
             if let Some(ref status) = args.status {
