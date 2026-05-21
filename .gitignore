@@ -1,6 +1,7 @@
 /target
 /.yojana
 .sutra/
+index.db
 
 # AgentOps session artifacts
 .agents/

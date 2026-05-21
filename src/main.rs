@@ -12,7 +12,9 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{CreateTaskParams, Db, ProjectUpdates, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates};
+use yojana::db::{
+    CreateTaskParams, Db, ProjectUpdates, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates,
+};
 use yojana::display::{self, EdgeDirection, EdgeDisplay, format_dependency_tree};
 use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
@@ -152,12 +154,47 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 None => {
+                    let active = db.list_projects(Some("active"), Some(None), None, None)?;
+                    let production =
+                        db.list_projects(Some("production"), Some(None), None, None)?;
+                    if active.is_empty() && production.is_empty() {
+                        println!("No projects found.");
+                    } else {
+                        if !active.is_empty() {
+                            println!("Active");
+                            println!("{}", display::format_projects_list(&active));
+                        }
+                        if !production.is_empty() {
+                            if !active.is_empty() {
+                                println!();
+                            }
+                            println!("Production");
+                            println!("{}", display::format_projects_list(&production));
+                        }
+                    }
+                    if all {
+                        let paused = db.list_projects(Some("paused"), Some(None), None, None)?;
+                        let archived = db.list_projects(Some("archived"), Some(None), None, None)?;
+                        if !paused.is_empty() {
+                            println!();
+                            println!("Paused");
+                            println!("{}", display::format_projects_list(&paused));
+                        }
+                        if !archived.is_empty() {
+                            println!();
+                            println!("Archived");
+                            println!("{}", display::format_projects_list(&archived));
+                        }
+                    }
+                }
+            }
+            Ok(())
+                /* original if-else block for --all flag
                     if all {
                         let projects = db.list_projects(None, Some(None), None, None)?;
                         println!("{}", display::format_projects_list(&projects));
                     } else {
-                        let active =
-                            db.list_projects(Some("active"), Some(None), None, None)?;
+                        let active = db.list_projects(Some("active"), Some(None), None, None)?;
                         let production =
                             db.list_projects(Some("production"), Some(None), None, None)?;
                         if active.is_empty() && production.is_empty() {
@@ -176,9 +213,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
-                }
-            }
-            Ok(())
+                */
         }
         Command::Tasks {
             identifier,

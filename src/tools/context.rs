@@ -156,10 +156,7 @@ struct ArcContext {
     prior_phase_tasks: Vec<crate::db::TaskRow>,
 }
 
-fn load_arc_context(
-    db: &Db,
-    task: &crate::db::TaskRow,
-) -> Result<Option<ArcContext>, YojanaError> {
+fn load_arc_context(db: &Db, task: &crate::db::TaskRow) -> Result<Option<ArcContext>, YojanaError> {
     let (arc_id, arc_phase) = match (&task.arc_id, &task.arc_phase) {
         (Some(id), Some(phase)) => (id, phase),
         _ => return Ok(None),

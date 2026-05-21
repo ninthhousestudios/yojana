@@ -6,6 +6,7 @@ const VALID_STATUSES: &[&str] = &[
     "ready-for-agent",
     "ready-for-human",
     "in-progress",
+    "needs-review",
     "done",
     "wontfix",
 ];
@@ -44,7 +45,8 @@ pub fn validate_transition(from: &str, to: &str) -> Result<(), YojanaError> {
         ],
         "ready-for-agent" => &["in-progress", "needs-triage", "ready-for-human"],
         "ready-for-human" => &["in-progress", "needs-triage", "ready-for-agent"],
-        "in-progress" => &["done", "needs-triage", "wontfix"],
+        "in-progress" => &["done", "needs-review", "needs-triage", "wontfix"],
+        "needs-review" => &["done", "in-progress", "needs-triage"],
         "done" => &["needs-triage"],
         "wontfix" => &["needs-triage"],
         _ => &[],
