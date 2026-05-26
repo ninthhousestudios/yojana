@@ -1201,6 +1201,35 @@ impl Db {
         }
     }
 
+    pub fn list_arcs_for_projects(
+        &self,
+        project_ids: &[Uuid],
+    ) -> Result<Vec<ArcRow>, YojanaError> {
+        let conn = self.conn.lock();
+        if project_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let placeholders: Vec<String> = project_ids
+            .iter()
+            .map(|pid| {
+                params.push(Box::new(pid.as_bytes().to_vec()));
+                format!("?{}", params.len())
+            })
+            .collect();
+        let sql = format!(
+            "{ARC_SELECT} WHERE a.project_id IN ({}) ORDER BY a.sequence_number ASC",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), map_arc_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn update_arc(&self, identifier: &str, updates: ArcUpdates) -> Result<ArcRow, YojanaError> {
         let conn = self.conn.lock();
         let arc = resolve_arc(&conn, identifier)?;

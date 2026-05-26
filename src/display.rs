@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::db::{ProjectRow, TaskRow};
+use crate::db::{ArcRow, ProjectRow, TaskRow};
 use crate::graph::ForestNode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,73 @@ pub struct EdgeDisplay {
     pub edge_type: String,
     pub other_human_id: String,
     pub other_title: String,
+}
+
+struct PhaseInfo {
+    name: String,
+    status: String,
+}
+
+fn parse_phases(phases_json: &str) -> Vec<PhaseInfo> {
+    let phases: Vec<serde_json::Value> = serde_json::from_str(phases_json).unwrap_or_default();
+    phases
+        .into_iter()
+        .filter_map(|p| {
+            let name = p.get("name")?.as_str()?.to_string();
+            let status = p
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("pending")
+                .to_string();
+            Some(PhaseInfo { name, status })
+        })
+        .collect()
+}
+
+fn render_phase_dots(phases: &[PhaseInfo]) -> String {
+    phases
+        .iter()
+        .map(|p| match p.status.as_str() {
+            "completed" | "active" => '●',
+            _ => '○',
+        })
+        .collect()
+}
+
+pub struct ArcDisplayInfo {
+    pub id: Uuid,
+    pub human_id: String,
+    pub sequence_number: i64,
+    pub title: String,
+    pub status: String,
+    phases: Vec<PhaseInfo>,
+}
+
+impl ArcDisplayInfo {
+    pub fn from_row(row: &ArcRow) -> Self {
+        let human_id = format!("{}/~{}", row.project_slug, row.sequence_number);
+        let phases = parse_phases(&row.phases);
+        Self {
+            id: row.id,
+            human_id,
+            sequence_number: row.sequence_number,
+            title: row.title.clone(),
+            status: row.status.clone(),
+            phases,
+        }
+    }
+
+    pub fn dot_progress(&self) -> String {
+        render_phase_dots(&self.phases)
+    }
+
+    pub fn phase_status(&self, phase_name: &str) -> &str {
+        self.phases
+            .iter()
+            .find(|p| p.name == phase_name)
+            .map(|p| p.status.as_str())
+            .unwrap_or("?")
+    }
 }
 
 fn edge_label(edge_type: &str, direction: EdgeDirection) -> &'static str {
@@ -60,14 +127,18 @@ pub fn format_projects_list(projects: &[ProjectRow]) -> String {
     table.to_string()
 }
 
-pub fn format_tasks_list(tasks: &[TaskRow]) -> String {
+pub fn format_tasks_list(tasks: &[TaskRow], arcs: &HashMap<Uuid, ArcDisplayInfo>) -> String {
     if tasks.is_empty() {
         return "No tasks found.".to_string();
     }
     let show_completed = tasks.iter().any(|t| t.completed_at.is_some());
+    let show_arc = tasks.iter().any(|t| t.arc_id.is_some());
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     let mut header = vec!["ID", "Title", "Status", "Category"];
+    if show_arc {
+        header.push("Arc");
+    }
     if show_completed {
         header.push("Completed");
     }
@@ -81,6 +152,16 @@ pub fn format_tasks_list(tasks: &[TaskRow]) -> String {
             t.status.clone(),
             category.to_string(),
         ];
+        if show_arc {
+            let arc_col = match (&t.arc_id, &t.arc_phase) {
+                (Some(aid), Some(phase)) => match arcs.get(aid) {
+                    Some(info) => format!("~{} {}", info.sequence_number, phase),
+                    None => format!("~? {}", phase),
+                },
+                _ => "-".to_string(),
+            };
+            row.push(arc_col);
+        }
         if show_completed {
             row.push(
                 t.completed_at
@@ -117,6 +198,7 @@ pub fn format_task_detail(
     t: &TaskRow,
     edges: &[EdgeDisplay],
     messages: &[serde_json::Value],
+    arc: Option<&ArcDisplayInfo>,
 ) -> String {
     let mut out = String::new();
     let human_id = format!("{}/{}", t.project_slug, t.sequence_number);
@@ -129,6 +211,16 @@ pub fn format_task_detail(
     }
     if let Some(st) = &t.slice_type {
         out.push_str(&format!("Slice:    {}\n", st));
+    }
+    if let (Some(arc_info), Some(phase)) = (arc, &t.arc_phase) {
+        out.push_str(&format!("Arc:      {} — {}\n", arc_info.human_id, arc_info.title));
+        let phase_status = arc_info.phase_status(phase);
+        out.push_str(&format!(
+            "Phase:    {} ({})  {}\n",
+            phase,
+            phase_status,
+            arc_info.dot_progress()
+        ));
     }
 
     let tags: Vec<String> = serde_json::from_str(&t.tags).unwrap_or_default();
@@ -256,6 +348,73 @@ pub fn format_dependency_tree(
         }
     }
     out
+}
+
+pub fn format_arc_tree(
+    arcs: &[ArcDisplayInfo],
+    arc_tasks: &HashMap<Uuid, Vec<&TaskRow>>,
+    dep_roots: &[ForestNode],
+    standalone: &[Uuid],
+    tasks: &HashMap<Uuid, &TaskRow>,
+) -> String {
+    if arcs.is_empty() && dep_roots.is_empty() && standalone.is_empty() {
+        return "No tasks found.".to_string();
+    }
+    let mut out = String::new();
+
+    for arc in arcs {
+        let tasks_in_arc = match arc_tasks.get(&arc.id) {
+            Some(t) if !t.is_empty() => t,
+            _ => continue,
+        };
+        let dots = arc.dot_progress();
+        out.push_str(&format!(
+            "Arc: {} — {}  [{}]  {}\n",
+            arc.human_id, arc.title, arc.status, dots
+        ));
+        for phase in &arc.phases {
+            let phase_tasks: Vec<&&TaskRow> = tasks_in_arc
+                .iter()
+                .filter(|t| t.arc_phase.as_deref() == Some(&phase.name))
+                .collect();
+            if phase_tasks.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("  {} ({}):\n", phase.name, phase.status));
+            for t in phase_tasks {
+                out.push_str(&format!(
+                    "    {}/{}  [{}] {}\n",
+                    t.project_slug, t.sequence_number, t.status, t.title
+                ));
+            }
+        }
+        out.push('\n');
+    }
+
+    for root in dep_roots {
+        render_node(&mut out, root, tasks, "", true, true);
+    }
+
+    if !standalone.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("Standalone (no dependency edges):\n");
+        for id in standalone {
+            if let Some(t) = tasks.get(id) {
+                out.push_str(&format!(
+                    "  {}/{}  [{}] {}\n",
+                    t.project_slug, t.sequence_number, t.status, t.title
+                ));
+            }
+        }
+    }
+
+    if out.is_empty() {
+        "No tasks found.".to_string()
+    } else {
+        out
+    }
 }
 
 fn render_node(
@@ -391,7 +550,7 @@ mod tests {
     #[test]
     fn tasks_list_shows_headers_and_data() {
         let tasks = vec![sample_task()];
-        let out = format_tasks_list(&tasks);
+        let out = format_tasks_list(&tasks, &HashMap::new());
         assert!(out.contains("ID"));
         assert!(out.contains("Title"));
         assert!(out.contains("Status"));
@@ -404,14 +563,14 @@ mod tests {
 
     #[test]
     fn tasks_list_empty() {
-        let out = format_tasks_list(&[]);
+        let out = format_tasks_list(&[], &HashMap::new());
         assert_eq!(out, "No tasks found.");
     }
 
     #[test]
     fn task_detail_shows_fields_and_criteria() {
         let t = sample_task();
-        let out = format_task_detail(&t, &[], &[]);
+        let out = format_task_detail(&t, &[], &[], None);
         assert!(out.contains("Task:     myproj/1"));
         assert!(out.contains("Title:    Do the thing"));
         assert!(out.contains("Status:   in-progress"));
@@ -429,7 +588,7 @@ mod tests {
         let mut t = sample_task();
         t.acceptance_criteria = "[]".to_string();
         t.decisions = "[]".to_string();
-        let out = format_task_detail(&t, &[], &[]);
+        let out = format_task_detail(&t, &[], &[], None);
         assert!(!out.contains("Acceptance Criteria:"));
         assert!(!out.contains("Decisions:"));
     }
@@ -437,7 +596,7 @@ mod tests {
     #[test]
     fn task_detail_omits_relationships_when_empty() {
         let t = sample_task();
-        let out = format_task_detail(&t, &[], &[]);
+        let out = format_task_detail(&t, &[], &[], None);
         assert!(!out.contains("Relationships:"));
     }
 
@@ -470,7 +629,7 @@ mod tests {
                 other_title: "Cross-project".into(),
             },
         ];
-        let out = format_task_detail(&t, &edges, &[]);
+        let out = format_task_detail(&t, &edges, &[], None);
         assert!(out.contains("Relationships:"));
         assert!(out.contains("Blocked by:"));
         assert!(out.contains("myproj/2 — Upstream task"));

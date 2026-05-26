@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -15,7 +16,7 @@ use yojana::config::Config;
 use yojana::db::{
     CreateTaskParams, Db, ProjectUpdates, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates,
 };
-use yojana::display::{self, EdgeDirection, EdgeDisplay, format_dependency_tree};
+use yojana::display::{self, ArcDisplayInfo, EdgeDirection, EdgeDisplay};
 use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
 
@@ -174,7 +175,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                     if all {
                         let paused = db.list_projects(Some("paused"), Some(None), None, None)?;
-                        let archived = db.list_projects(Some("archived"), Some(None), None, None)?;
+                        let archived =
+                            db.list_projects(Some("archived"), Some(None), None, None)?;
                         if !paused.is_empty() {
                             println!();
                             println!("Paused");
@@ -189,31 +191,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Ok(())
-                /* original if-else block for --all flag
-                    if all {
-                        let projects = db.list_projects(None, Some(None), None, None)?;
-                        println!("{}", display::format_projects_list(&projects));
-                    } else {
-                        let active = db.list_projects(Some("active"), Some(None), None, None)?;
-                        let production =
-                            db.list_projects(Some("production"), Some(None), None, None)?;
-                        if active.is_empty() && production.is_empty() {
-                            println!("No projects found.");
-                        } else {
-                            if !active.is_empty() {
-                                println!("Active");
-                                println!("{}", display::format_projects_list(&active));
-                            }
-                            if !production.is_empty() {
-                                if !active.is_empty() {
-                                    println!();
-                                }
-                                println!("Production");
-                                println!("{}", display::format_projects_list(&production));
-                            }
-                        }
-                    }
-                */
         }
         Command::Tasks {
             identifier,
@@ -233,13 +210,27 @@ async fn main() -> anyhow::Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("task '{}' not found", identifier))?;
                 let edges = resolve_edges_for_display(&db, &task)?;
                 let messages = db.get_conversation_messages(&task.id)?;
-                println!("{}", display::format_task_detail(&task, &edges, &messages));
+                let arc_info = match &task.arc_id {
+                    Some(aid) => db
+                        .get_arc(&aid.to_string())?
+                        .map(|row| ArcDisplayInfo::from_row(&row)),
+                    None => None,
+                };
+                println!(
+                    "{}",
+                    display::format_task_detail(&task, &edges, &messages, arc_info.as_ref())
+                );
                 return Ok(());
             }
             let project = db
                 .get_project(None, Some(&identifier))?
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", identifier))?;
             let project_ids = db.project_ids_with_descendants(&project.id)?;
+            let arc_map: HashMap<uuid::Uuid, ArcDisplayInfo> = db
+                .list_arcs_for_projects(&project_ids)?
+                .iter()
+                .map(|a| (a.id, ArcDisplayInfo::from_row(a)))
+                .collect();
             // If user asked for a specific status, honor it and skip default-hide.
             let cutoff = if all || status.is_some() {
                 None
@@ -262,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 if !active.is_empty() || recent_terminal.is_empty() {
                     println!("Active");
-                    println!("{}", display::format_tasks_list(&active));
+                    println!("{}", display::format_tasks_list(&active, &arc_map));
                 }
                 if !recent_terminal.is_empty() {
                     if !active.is_empty() {
@@ -274,7 +265,7 @@ async fn main() -> anyhow::Result<()> {
                         "Recently done (last 24h)"
                     };
                     println!("{header}");
-                    println!("{}", display::format_tasks_list(&recent_terminal));
+                    println!("{}", display::format_tasks_list(&recent_terminal, &arc_map));
                 }
             }
             Ok(())
@@ -401,15 +392,34 @@ async fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", slug))?;
             let project_ids = db.project_ids_with_descendants(&project.id)?;
             let filter = TaskQueryFilter {
-                project_ids: Some(project_ids),
+                project_ids: Some(project_ids.clone()),
                 ..Default::default()
             };
             let tasks = db.list_tasks(&filter)?;
-            let task_ids: Vec<_> = tasks.iter().map(|t| t.id).collect();
-            let edges = db.list_edges_by_type_for_tasks(&task_ids, "depends_on")?;
-            let (mut forest, mut standalone) = build_dependency_forest(&task_ids, &edges);
-            let task_map: std::collections::HashMap<uuid::Uuid, &yojana::db::TaskRow> =
+            let task_map: HashMap<uuid::Uuid, &yojana::db::TaskRow> =
                 tasks.iter().map(|t| (t.id, t)).collect();
+
+            let arcs = db.list_arcs_for_projects(&project_ids)?;
+            let arc_display: Vec<ArcDisplayInfo> =
+                arcs.iter().map(|a| ArcDisplayInfo::from_row(a)).collect();
+            let arc_id_set: std::collections::HashSet<uuid::Uuid> =
+                arcs.iter().map(|a| a.id).collect();
+
+            let mut arc_tasks: HashMap<uuid::Uuid, Vec<&yojana::db::TaskRow>> = HashMap::new();
+            let mut non_arc_ids: Vec<uuid::Uuid> = Vec::new();
+            for t in &tasks {
+                if let Some(aid) = &t.arc_id {
+                    if arc_id_set.contains(aid) {
+                        arc_tasks.entry(*aid).or_default().push(t);
+                        continue;
+                    }
+                }
+                non_arc_ids.push(t.id);
+            }
+
+            let edges = db.list_edges_by_type_for_tasks(&non_arc_ids, "depends_on")?;
+            let (mut forest, mut standalone) = build_dependency_forest(&non_arc_ids, &edges);
+
             if !all {
                 let cutoff = chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS;
                 forest.retain(|root| !tree_all_stale(root, &task_map, cutoff));
@@ -419,10 +429,20 @@ async fn main() -> anyhow::Result<()> {
                         .map(|t| !is_stale_terminal(t, cutoff))
                         .unwrap_or(false)
                 });
+                for tasks_in_arc in arc_tasks.values_mut() {
+                    tasks_in_arc.retain(|t| !is_stale_terminal(t, cutoff));
+                }
             }
+
             print!(
                 "{}",
-                format_dependency_tree(&forest, &standalone, &task_map)
+                display::format_arc_tree(
+                    &arc_display,
+                    &arc_tasks,
+                    &forest,
+                    &standalone,
+                    &task_map
+                )
             );
             Ok(())
         }
