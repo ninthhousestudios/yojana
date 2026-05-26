@@ -2,6 +2,7 @@
 /.yojana
 .sutra/
 index.db
+src/experiments/
 
 # AgentOps session artifacts
 .agents/

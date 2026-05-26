@@ -123,6 +123,7 @@ Valid statuses:
 | `ready-for-agent` | Triaged and ready to be picked up by an agent (AFK). Acceptance criteria are concrete enough to execute against. |
 | `ready-for-human` | Triaged and ready, but requires human attention (HITL — design decision, grilling, review). |
 | `in-progress` | Actively being worked on. Cap yourself at a small number of these at a time. |
+| `needs-review` | A task that is finished but needs to reviewed before being marked done. |
 | `done` | Finished. `completed_at` is recorded. |
 | `wontfix` | Closed without doing the work. Decision should be in `decisions` or a comment. |
 
@@ -130,7 +131,7 @@ Transitions:
 
 ```
 needs-triage ──► needs-info
-             ──► ready-for-agent ──► in-progress ──► done
+             ──► ready-for-agent ──► in-progress (──► needs-review) ──► done
              ──► ready-for-human ─┘                 ──► wontfix
              ──► in-progress
              ──► wontfix
