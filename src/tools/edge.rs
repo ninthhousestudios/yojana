@@ -5,26 +5,21 @@ use uuid::Uuid;
 use crate::db::{Db, EdgeRow};
 use crate::error::YojanaError;
 
+// Field docs omitted to keep the schema small (it reloads on summarization);
+// semantics live in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EdgeArgs {
-    /// Action: "create", "delete", "list"
     pub action: String,
-    /// Edge UUID (for delete)
     #[serde(default)]
     pub id: Option<String>,
-    /// Source task identifier — UUID or "project-slug/N" (for create, list)
     #[serde(default)]
     pub source: Option<String>,
-    /// Target task identifier — UUID or "project-slug/N" (for create)
     #[serde(default)]
     pub target: Option<String>,
-    /// "depends_on", "relates_to", "supersedes", "refines", "motivated_by"
     #[serde(default)]
     pub edge_type: Option<String>,
-    /// Optional note on the relationship
     #[serde(default)]
     pub note: Option<String>,
-    /// Task identifier for list (UUID or "project-slug/N")
     #[serde(default)]
     pub task: Option<String>,
 }

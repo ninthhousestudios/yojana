@@ -47,7 +47,7 @@ impl Clone for YojanaServer {
 #[tool_router(router = tool_router)]
 impl YojanaServer {
     #[tool(
-        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, handoff, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, has_handoff, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — supports handoff: set a string to write, empty string to clear)."
+        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, handoff, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, has_handoff, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — supports handoff: set a string to write, empty string to clear). create/update return a slim ack {id, slug, status, title}; use action=get for full detail."
     )]
     pub async fn yojana_project(
         &self,
@@ -58,7 +58,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, get, update, advance, or revert arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending; returns project/~N identifier), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs), advance (requires id; optional phase to target specific phase, skip=true to set skipped instead of completed, note for history), revert (requires id and phase; sets completed phase back to active, optional note for history)."
+        description = "Create, get, update, advance, or revert arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs), advance (requires id; optional phase to target specific phase, skip=true to set skipped instead of completed, note for history), revert (requires id and phase; sets completed phase back to active, optional note for history). create/update/advance/revert return a slim ack {id, human_id, status, active_phase}; use action=get for full detail (phases, history)."
     )]
     pub async fn yojana_arc(
         &self,
@@ -91,7 +91,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Query tasks with filters. Optional: project (id or slug — includes tasks from all descendant sub-projects), status, category, slice_type, tag. Omit project for cross-project query. Each result includes ready/blocked flags computed from the dependency graph."
+        description = "Query tasks with filters. Optional: project (id or slug — includes tasks from all descendant sub-projects), status, category, slice_type, tag, arc (UUID or 'project-slug/~N'; when set, results are grouped by phase), limit (default 100), offset. By default done/wontfix tasks are included only if completed in the last 24h; set include_all_terminal=true for all, or recent_terminal_window_ms to widen the window (ignored when status is set). Omit project for cross-project query. Each result is keyed by human_id and includes ready/blocked flags plus blocked_by (human_ids) from the dependency graph."
     )]
     pub async fn yojana_query(
         &self,
