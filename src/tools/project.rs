@@ -8,32 +8,25 @@ use crate::error::YojanaError;
 
 const VALID_STATUSES: &[&str] = &["active", "paused", "archived"];
 
+// Field docs omitted to keep the schema small (it reloads on summarization);
+// semantics live in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProjectArgs {
-    /// Action: "create", "get", "list", "update"
     pub action: String,
-    /// Project UUID (for get/update)
     #[serde(default)]
     pub id: Option<String>,
-    /// Project slug (for create, or get/update as alternative to id)
     #[serde(default)]
     pub slug: Option<String>,
-    /// Project title (for create/update)
     #[serde(default)]
     pub title: Option<String>,
-    /// Project description (for create/update)
     #[serde(default)]
     pub description: Option<String>,
-    /// Project status filter (for list) or new status (for update): "active", "paused", "archived"
     #[serde(default)]
     pub status: Option<String>,
-    /// Parent project slug or id (for list: filter children of this parent)
     #[serde(default)]
     pub parent: Option<String>,
-    /// Handoff note (for update). Set to write; set to empty string to clear.
     #[serde(default)]
     pub handoff: Option<String>,
-    /// If false, list returns full rows (id, status, parent_id, has_handoff, child_count, timestamps). Default: true (slug + title only).
     #[serde(default)]
     pub compact: Option<bool>,
 }
@@ -115,6 +108,17 @@ impl ProjectOutput {
     }
 }
 
+/// Slim acknowledgement for project create/update so they don't echo the full
+/// row + history every call. Use action=get for full detail.
+fn slim_ack(row: &ProjectRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": row.id.to_string(),
+        "slug": row.slug,
+        "status": row.status,
+        "title": row.title,
+    })
+}
+
 fn validate_slug(slug: &str) -> Result<(), YojanaError> {
     if slug.is_empty() || slug.starts_with('/') || slug.ends_with('/') || slug.contains("//") {
         return Err(YojanaError::InvalidInput(
@@ -182,7 +186,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
             let description = args.description.as_deref().unwrap_or("");
             let parent_id = resolve_parent_id(db, slug)?;
             let row = db.create_project(slug, title, description, parent_id)?;
-            Ok(serde_json::to_value(ProjectOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "get" => {
             let row = db
@@ -245,7 +249,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
                     handoff,
                 },
             )?;
-            Ok(serde_json::to_value(ProjectOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         other => Err(YojanaError::InvalidInput(format!(
             "unknown action '{other}'; valid: create, get, list, update"

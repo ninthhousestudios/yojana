@@ -5,37 +5,31 @@ use uuid::Uuid;
 use crate::db::{ArcRow, ArcUpdates, CreateArcParams, Db, HistoryEntry};
 use crate::error::YojanaError;
 
+// Field docs omitted to keep the schema small (it reloads on summarization);
+// semantics live in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ArcArgs {
-    /// Action: "create", "get", "update", "advance", "revert"
     pub action: String,
-    /// Arc UUID or "project-slug/~N" (for get/update)
     #[serde(default)]
     pub id: Option<String>,
-    /// Project id or slug (required for create)
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// Arc status: "active", "paused", "completed", "abandoned"
     #[serde(default)]
     pub status: Option<String>,
-    /// Phase definitions (required for create). Array of {name, slice_type?, gate?}
     #[serde(default)]
     pub phases: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub context_refs: Option<Vec<serde_json::Value>>,
-    /// Target phase name (for advance/revert)
     #[serde(default)]
     pub phase: Option<String>,
-    /// Optional note for phase transition history
     #[serde(default)]
     pub note: Option<String>,
-    /// If true, advance sets phase to "skipped" instead of "completed"
     #[serde(default)]
     pub skip: Option<bool>,
 }
@@ -84,6 +78,25 @@ fn to_json(val: &(impl serde::Serialize + ?Sized)) -> Result<String, YojanaError
     serde_json::to_string(val).map_err(YojanaError::Json)
 }
 
+/// Slim acknowledgement for arc writes (create/update/advance/revert) so they
+/// don't echo the full phases array + history every call. `active_phase` is the
+/// name of the currently-active phase — the field most writes care about. Use
+/// action=get for full detail.
+fn slim_ack(row: &ArcRow) -> serde_json::Value {
+    let phases: Vec<serde_json::Value> = serde_json::from_str(&row.phases).unwrap_or_default();
+    let active_phase = phases
+        .iter()
+        .find(|p| p.get("status").and_then(|s| s.as_str()) == Some("active"))
+        .and_then(|p| p.get("name").and_then(|n| n.as_str()))
+        .map(|s| s.to_string());
+    serde_json::json!({
+        "id": row.id.to_string(),
+        "human_id": format!("{}/~{}", row.project_slug, row.sequence_number),
+        "status": row.status,
+        "active_phase": active_phase,
+    })
+}
+
 fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError> {
     let row = if Uuid::parse_str(project).is_ok() {
         db.get_project(Some(project), None)?
@@ -122,7 +135,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 context_refs: to_json(&args.context_refs.unwrap_or_default())?,
             };
             let row = db.create_arc(params)?;
-            Ok(serde_json::to_value(ArcOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "get" => {
             let id = args
@@ -148,7 +161,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 context_refs: args.context_refs.map(|v| to_json(&v)).transpose()?,
             };
             let row = db.update_arc(id, updates)?;
-            Ok(serde_json::to_value(ArcOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "advance" => {
             let id = args
@@ -157,7 +170,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 .ok_or_else(|| YojanaError::InvalidInput("id required for advance".into()))?;
             let skip = args.skip.unwrap_or(false);
             let row = db.advance_arc_phase(id, args.phase.as_deref(), skip, args.note)?;
-            Ok(serde_json::to_value(ArcOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "revert" => {
             let id = args
@@ -169,7 +182,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("phase required for revert".into()))?;
             let row = db.revert_arc_phase(id, phase, args.note)?;
-            Ok(serde_json::to_value(ArcOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         other => Err(YojanaError::InvalidInput(format!(
             "unknown action '{other}'; valid: create, get, update, advance, revert"
@@ -236,14 +249,21 @@ mod tests {
         }
     }
 
+    // Arc writes return a slim ack (yojana/33); fetch full detail via get.
+    fn get_full(db: &Db, id: &str) -> serde_json::Value {
+        handle(db, arc_args("get", id)).unwrap()
+    }
+
     #[test]
-    fn arc_tool_create_returns_human_id() {
+    fn arc_tool_create_returns_slim_ack() {
         let db = test_db();
         let out = create_arc(&db);
         assert_eq!(out["human_id"], "proj/~1");
         assert_eq!(out["status"], "active");
-        assert_eq!(out["phases"][0]["status"], "active");
-        assert_eq!(out["phases"][1]["status"], "pending");
+        assert_eq!(out["active_phase"], "design");
+        let full = get_full(&db, "proj/~1");
+        assert_eq!(full["phases"][0]["status"], "active");
+        assert_eq!(full["phases"][1]["status"], "pending");
     }
 
     #[test]
@@ -541,7 +561,8 @@ mod tests {
 
         let mut args = arc_args("update", "proj/~1");
         args.description = Some("New description".into());
-        let updated = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let updated = get_full(&db, "proj/~1");
         let history = updated["history"].as_array().unwrap();
         let desc_entry = history
             .iter()
@@ -556,7 +577,8 @@ mod tests {
 
         let mut args = arc_args("update", "proj/~1");
         args.tags = Some(vec!["new-tag".into()]);
-        let updated = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let updated = get_full(&db, "proj/~1");
         let history = updated["history"].as_array().unwrap();
         let tags_entry = history
             .iter()
@@ -573,7 +595,8 @@ mod tests {
         args.context_refs = Some(vec![
             serde_json::json!({"type": "doc:path", "value": "foo.md"}),
         ]);
-        let updated = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let updated = get_full(&db, "proj/~1");
         let history = updated["history"].as_array().unwrap();
         let refs_entry = history
             .iter()
@@ -615,7 +638,8 @@ mod tests {
         let db = test_db();
         create_arc(&db);
 
-        let out = handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["name"], "design");
         assert_eq!(phases[0]["status"], "completed");
@@ -637,7 +661,8 @@ mod tests {
 
         let mut args = arc_args("advance", "proj/~1");
         args.phase = Some("implement".into());
-        let out = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["status"], "active");
         assert_eq!(phases[1]["status"], "completed");
@@ -651,7 +676,8 @@ mod tests {
 
         let mut args = arc_args("advance", "proj/~1");
         args.skip = Some(true);
-        let out = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["status"], "skipped");
         assert_eq!(phases[1]["status"], "active");
@@ -665,7 +691,8 @@ mod tests {
 
         let mut args = arc_args("revert", "proj/~1");
         args.phase = Some("design".into());
-        let out = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["status"], "active");
         assert_eq!(phases[1]["status"], "active");
@@ -687,7 +714,8 @@ mod tests {
 
         let mut args = arc_args("revert", "proj/~1");
         args.phase = Some("design".into());
-        let out = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["status"], "active");
         assert_eq!(phases[1]["status"], "completed");
@@ -701,7 +729,8 @@ mod tests {
 
         let mut args = arc_args("advance", "proj/~1");
         args.note = Some("design review passed".into());
-        let out = handle(&db, args).unwrap();
+        handle(&db, args).unwrap();
+        let out = get_full(&db, "proj/~1");
         let history = out["history"].as_array().unwrap();
         let entry = history
             .iter()
@@ -718,7 +747,8 @@ mod tests {
         let db = test_db();
         create_arc_with_phases(&db, vec![serde_json::json!({"name": "only-phase"})]);
 
-        let out = handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        handle(&db, arc_args("advance", "proj/~1")).unwrap();
+        let out = get_full(&db, "proj/~1");
         let phases = out["phases"].as_array().unwrap();
         assert_eq!(phases[0]["status"], "completed");
     }
