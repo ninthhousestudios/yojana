@@ -10,7 +10,6 @@ use crate::graph;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadyArgs {
-    /// Project id or slug (optional — omit for cross-project ready check)
     #[serde(default)]
     pub project: Option<String>,
 }
@@ -23,8 +22,6 @@ pub struct HandoffEntry {
 
 #[derive(Debug, Serialize)]
 pub struct ReadyItem {
-    pub id: String,
-    pub project_slug: String,
     pub human_id: String,
     pub title: String,
     pub status: String,
@@ -45,8 +42,6 @@ pub struct ReadyResponse {
 impl ReadyItem {
     fn from_task(t: TaskRow, phase_slice_type: Option<String>) -> Self {
         Self {
-            id: t.id.to_string(),
-            project_slug: t.project_slug.clone(),
             human_id: format!("{}/{}", t.project_slug, t.sequence_number),
             title: t.title,
             status: t.status,

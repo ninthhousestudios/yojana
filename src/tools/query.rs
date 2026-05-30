@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -8,46 +8,34 @@ use crate::db::{Db, TaskQueryFilter, TaskRow};
 use crate::error::YojanaError;
 use crate::graph;
 
+// Field docs omitted to keep the schema small (it reloads on summarization);
+// semantics live in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryArgs {
-    /// Project id or slug (optional — omit for cross-project query)
     #[serde(default)]
     pub project: Option<String>,
-    /// Filter by status
     #[serde(default)]
     pub status: Option<String>,
-    /// Filter by category
     #[serde(default)]
     pub category: Option<String>,
-    /// Filter by slice_type
     #[serde(default)]
     pub slice_type: Option<String>,
-    /// Filter by tag (tasks containing this tag)
     #[serde(default)]
     pub tag: Option<String>,
-    /// Filter by arc (UUID or "project-slug/~N"). When set, results are grouped by phase.
     #[serde(default)]
     pub arc: Option<String>,
-    /// Max results to return (default 100)
     #[serde(default)]
     pub limit: Option<i64>,
-    /// Offset for pagination
     #[serde(default)]
     pub offset: Option<i64>,
-    /// If true, include all done/wontfix tasks. Default behavior includes them
-    /// only if completed within `recent_terminal_window_ms` (default: last 24h).
     #[serde(default)]
     pub include_all_terminal: bool,
-    /// Window in millis for "recent" done/wontfix tasks. Defaults to 24h.
-    /// Ignored if `include_all_terminal` is true or `status` is set.
     #[serde(default)]
     pub recent_terminal_window_ms: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct QueryResultItem {
-    pub id: String,
-    pub project_slug: String,
     pub human_id: String,
     pub title: String,
     pub status: String,
@@ -71,7 +59,11 @@ fn resolve_project_ids(db: &Db, project: &str) -> Result<Vec<Uuid>, YojanaError>
     db.project_ids_with_descendants(&row.id)
 }
 
-fn enrich(tasks: Vec<TaskRow>, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec<QueryResultItem> {
+fn enrich(
+    tasks: Vec<TaskRow>,
+    deps_with_status: &[(Uuid, Uuid, String)],
+    blocker_human_ids: &HashMap<Uuid, String>,
+) -> Vec<QueryResultItem> {
     tasks
         .into_iter()
         .map(|t| {
@@ -79,8 +71,6 @@ fn enrich(tasks: Vec<TaskRow>, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec
             let blockers = graph::blocked_by(t.id, deps_with_status);
             let blocked = !blockers.is_empty();
             QueryResultItem {
-                id: t.id.to_string(),
-                project_slug: t.project_slug.clone(),
                 human_id: format!("{}/{}", t.project_slug, t.sequence_number),
                 title: t.title,
                 status: t.status,
@@ -88,7 +78,15 @@ fn enrich(tasks: Vec<TaskRow>, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec
                 slice_type: t.slice_type,
                 ready,
                 blocked,
-                blocked_by: blockers.iter().map(|id| id.to_string()).collect(),
+                blocked_by: blockers
+                    .iter()
+                    .map(|id| {
+                        blocker_human_ids
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| id.to_string())
+                    })
+                    .collect(),
                 updated_at: t.updated_at,
                 arc_phase: t.arc_phase,
             }
@@ -136,7 +134,14 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
 
     let tasks = db.list_tasks(&filter)?;
     let deps = db.list_depends_on_with_status()?;
-    let results = enrich(tasks, &deps);
+    // Resolve blocker UUIDs to human ids in one batch so rows carry actionable
+    // "{slug}/{seq}" references instead of opaque UUIDs.
+    let blocker_ids: Vec<Uuid> = tasks
+        .iter()
+        .flat_map(|t| graph::blocked_by(t.id, &deps))
+        .collect();
+    let blocker_human_ids = db.task_human_ids(&blocker_ids)?;
+    let results = enrich(tasks, &deps, &blocker_human_ids);
 
     if args.arc.is_some() {
         let mut grouped: BTreeMap<String, Vec<&QueryResultItem>> = BTreeMap::new();
@@ -151,5 +156,111 @@ pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError
         Ok(serde_json::to_value(grouped)?)
     } else {
         Ok(serde_json::to_value(results)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::{edge, task};
+
+    fn test_db() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.create_project("proj", "Project", "", None).unwrap();
+        db
+    }
+
+    fn create_task(db: &Db, title: &str) -> String {
+        let args = task::TaskArgs {
+            action: "create".into(),
+            id: None,
+            project: Some("proj".into()),
+            title: Some(title.into()),
+            description: None,
+            category: None,
+            status: Some("ready-for-agent".into()),
+            slice_type: None,
+            acceptance_criteria: None,
+            decisions: None,
+            context_refs: None,
+            files: None,
+            tags: None,
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            text: None,
+            author: None,
+            commit: None,
+            arc_id: None,
+            arc_phase: None,
+        };
+        let out = task::handle(db, args).unwrap();
+        out["human_id"].as_str().unwrap().to_string()
+    }
+
+    fn query_all(db: &Db) -> Vec<serde_json::Value> {
+        let out = handle(
+            db,
+            QueryArgs {
+                project: Some("proj".into()),
+                status: None,
+                category: None,
+                slice_type: None,
+                tag: None,
+                arc: None,
+                limit: None,
+                offset: None,
+                include_all_terminal: false,
+                recent_terminal_window_ms: None,
+            },
+        )
+        .unwrap();
+        out.as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn rows_drop_uuid_and_project_slug_keep_human_id() {
+        let db = test_db();
+        create_task(&db, "Solo");
+        let rows = query_all(&db);
+        let row = &rows[0];
+        assert!(row.get("id").is_none(), "raw UUID should be gone");
+        assert!(row.get("project_slug").is_none(), "project_slug is redundant");
+        assert_eq!(row["human_id"], "proj/1");
+    }
+
+    #[test]
+    fn blocked_by_uses_human_ids() {
+        let db = test_db();
+        let blocker = create_task(&db, "Blocker"); // proj/1
+        let blocked = create_task(&db, "Blocked"); // proj/2
+        edge::handle(
+            &db,
+            edge::EdgeArgs {
+                action: "create".into(),
+                id: None,
+                source: Some(blocked.clone()),
+                target: Some(blocker.clone()),
+                edge_type: Some("depends_on".into()),
+                note: None,
+                task: None,
+            },
+        )
+        .unwrap();
+
+        let rows = query_all(&db);
+        let blocked_row = rows
+            .iter()
+            .find(|r| r["human_id"] == "proj/2")
+            .expect("blocked task present");
+        let blocked_by: Vec<String> = blocked_row["blocked_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(blocked_by, vec![blocker], "blocker rendered as human_id, not UUID");
+        assert_eq!(blocked_row["blocked"], true);
     }
 }

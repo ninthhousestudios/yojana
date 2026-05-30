@@ -1697,6 +1697,40 @@ impl Db {
         Ok(rows)
     }
 
+    /// Map a set of task UUIDs to their human ids ("{project_slug}/{seq}").
+    /// Used to render blocker references without leaking raw UUIDs.
+    pub fn task_human_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, String>, YojanaError> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let conn = self.conn.lock();
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT t.id, p.slug, t.sequence_number \
+             FROM tasks t JOIN projects p ON t.project_id = p.id \
+             WHERE t.id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<Vec<u8>> = ids.iter().map(|id| id.as_bytes().to_vec()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|p| p as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let id = uuid_from_blob(row, "id")?;
+                let slug: String = row.get("slug")?;
+                let seq: i64 = row.get("sequence_number")?;
+                Ok((id, format!("{slug}/{seq}")))
+            })?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+        Ok(rows)
+    }
+
     // --- Edge methods ---
 
     pub fn create_edge(
