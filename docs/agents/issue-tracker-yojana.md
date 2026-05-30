@@ -16,6 +16,8 @@ yojana_task action=create project="<slug>" title="<title>" description="<desc>"
 
 New tasks start as `needs-triage`. Set fields you know; omit what you don't.
 
+`create` and `update` return a slim ack — `{id, human_id, status, title}` — not the full task. When you need the full record (description, acceptance criteria, history, etc.), fetch it with `action=get` or a `yojana_context` shape.
+
 ### Fetch a ticket
 
 By human ID (preferred):

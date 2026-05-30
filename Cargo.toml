@@ -1,6 +1,6 @@
 [package]
 name = "yojana"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "Local task graph for the manas ecosystem"
 license = "AGPL-3.0"
