@@ -26,26 +26,25 @@ const VALID_REF_TYPES: &[&str] = &[
 ];
 const VALID_SLICE_TYPES: &[&str] = &["AFK", "HITL"];
 
+// Field-level docs are intentionally omitted: schemars serializes them into
+// the tool schema, which reloads several times per long session. Cross-cutting
+// semantics (null-clears, arc pairing, commit shorthand, comment fields) live
+// once in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TaskArgs {
-    /// Action: "create", "get", "update", "comment"
     pub action: String,
-    /// Task UUID or "project-slug/N" (for get/update/comment)
     #[serde(default)]
     pub id: Option<String>,
-    /// Project id or slug (required for create)
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// "bug", "enhancement", or "experiment". Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub category: Option<Option<String>>,
     #[serde(default)]
     pub status: Option<String>,
-    /// "AFK" or "HITL". Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub slice_type: Option<Option<String>>,
     #[serde(default)]
@@ -58,32 +57,22 @@ pub struct TaskArgs {
     pub files: Option<Vec<String>>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
-    /// Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub implementation_plan: Option<Option<String>>,
-    /// Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub execution_record: Option<Option<String>>,
-    /// Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub reproduction: Option<Option<String>>,
-    /// Pass null to clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub root_cause: Option<Option<String>>,
-    /// Comment text (for action=comment)
     #[serde(default)]
     pub text: Option<String>,
-    /// Comment author (for action=comment, defaults to "user")
     #[serde(default)]
     pub author: Option<String>,
-    /// Commit SHA shorthand. Appends a {type:"git:commit", value:<sha>}
-    /// context_ref. Use with action=update (typically alongside status=done).
     #[serde(default)]
     pub commit: Option<String>,
-    /// Arc identifier (UUID or "project-slug/~N"). Must be provided with arc_phase.
     #[serde(default)]
     pub arc_id: Option<String>,
-    /// Phase name within the arc. Must be provided with arc_id.
     #[serde(default)]
     pub arc_phase: Option<String>,
 }
@@ -156,6 +145,18 @@ impl From<TaskRow> for TaskOutput {
 
 fn json_array(s: &str) -> Vec<serde_json::Value> {
     serde_json::from_str(s).unwrap_or_default()
+}
+
+/// Slim acknowledgement returned by create/update so the common write path
+/// doesn't echo the full task object back every call. Callers needing detail
+/// fetch it via action=get (or yojana_context).
+fn slim_ack(row: &TaskRow) -> serde_json::Value {
+    serde_json::json!({
+        "id": row.id.to_string(),
+        "human_id": format!("{}/{}", row.project_slug, row.sequence_number),
+        "status": row.status,
+        "title": row.title,
+    })
 }
 
 fn validate_category(cat: &str) -> Result<(), YojanaError> {
@@ -285,7 +286,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 arc_phase,
             };
             let row = db.create_task(params)?;
-            Ok(serde_json::to_value(TaskOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "get" => {
             let id = args
@@ -383,7 +384,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             if had_status_change {
                 db.try_auto_advance_phase(&row.id)?;
             }
-            Ok(serde_json::to_value(TaskOutput::from(row))?)
+            Ok(slim_ack(&row))
         }
         "comment" => {
             let id = args
@@ -400,7 +401,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let message = db.append_conversation_message(&task.id, text, args.author.as_deref())?;
             Ok(serde_json::json!({
                 "task": format!("{}/{}", task.project_slug, task.sequence_number),
-                "message": message,
+                "ts": message.get("ts"),
             }))
         }
         other => Err(YojanaError::InvalidInput(format!(
@@ -413,6 +414,126 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
 mod tests {
     use super::*;
     use crate::tools::arc;
+
+    #[test]
+    fn schema_stays_under_token_budget() {
+        let schema = schemars::schema_for!(TaskArgs);
+        let json = serde_json::to_string(&schema).unwrap();
+        let est_tokens = json.len() / 4;
+        eprintln!(
+            "TaskArgs schema: {} chars (~{} tokens)",
+            json.len(),
+            est_tokens
+        );
+        // Guards the yojana/32 schema diet: the hot-path schema reloads several
+        // times per long session, so keep it lean.
+        assert!(
+            est_tokens <= 450,
+            "TaskArgs schema grew to ~{est_tokens} tokens (>450); did a field description sneak back in?"
+        );
+    }
+
+    fn plain_blank() -> TaskArgs {
+        TaskArgs {
+            action: String::new(),
+            id: None,
+            project: None,
+            title: None,
+            description: None,
+            category: None,
+            status: None,
+            slice_type: None,
+            acceptance_criteria: None,
+            decisions: None,
+            context_refs: None,
+            files: None,
+            tags: None,
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            text: None,
+            author: None,
+            commit: None,
+            arc_id: None,
+            arc_phase: None,
+        }
+    }
+
+    fn keys(v: &serde_json::Value) -> Vec<String> {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    }
+
+    #[test]
+    fn create_returns_slim_ack() {
+        let db = test_db();
+        let mut args = task_args_create("Slim me", "design");
+        args.arc_id = None;
+        args.arc_phase = None;
+        let out = handle(&db, args).unwrap();
+        assert_eq!(keys(&out), vec!["human_id", "id", "status", "title"]);
+        assert_eq!(out["title"], "Slim me");
+    }
+
+    #[test]
+    fn update_returns_slim_ack() {
+        let db = test_db();
+        let mut args = task_args_create("Edit me", "design");
+        args.arc_id = None;
+        args.arc_phase = None;
+        let created = handle(&db, args).unwrap();
+        let id = created["human_id"].as_str().unwrap().to_string();
+        let out = update_status(&db, &id, "in-progress");
+        assert_eq!(keys(&out), vec!["human_id", "id", "status", "title"]);
+        assert_eq!(out["status"], "in-progress");
+    }
+
+    #[test]
+    fn comment_omits_echoed_text() {
+        let db = test_db();
+        let mut args = task_args_create("Talk to me", "design");
+        args.arc_id = None;
+        args.arc_phase = None;
+        let created = handle(&db, args).unwrap();
+        let id = created["human_id"].as_str().unwrap().to_string();
+        let out = handle(
+            &db,
+            TaskArgs {
+                action: "comment".into(),
+                id: Some(id),
+                text: Some("a fairly long comment body that we do not want echoed back".into()),
+                ..plain_blank()
+            },
+        )
+        .unwrap();
+        assert_eq!(keys(&out), vec!["task", "ts"]);
+        assert!(out.get("message").is_none());
+    }
+
+    #[test]
+    fn get_returns_full_detail() {
+        let db = test_db();
+        let mut args = task_args_create("Full me", "design");
+        args.arc_id = None;
+        args.arc_phase = None;
+        let created = handle(&db, args).unwrap();
+        let id = created["human_id"].as_str().unwrap().to_string();
+        let out = handle(
+            &db,
+            TaskArgs {
+                action: "get".into(),
+                id: Some(id),
+                ..plain_blank()
+            },
+        )
+        .unwrap();
+        // get must still surface the heavy fields (no regression for review/planning).
+        for field in ["description", "history", "messages", "acceptance_criteria", "tags"] {
+            assert!(out.get(field).is_some(), "get should include {field}");
+        }
+    }
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();

@@ -395,8 +395,37 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(task["arc_id"], arc["id"]);
-        assert_eq!(task["arc_phase"], "design");
+        // create returns a slim ack (yojana/32); arc assignment is verified via get.
+        let full = task::handle(
+            &db,
+            task::TaskArgs {
+                action: "get".into(),
+                id: Some(task["human_id"].as_str().unwrap().to_string()),
+                project: None,
+                title: None,
+                description: None,
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: None,
+                decisions: None,
+                context_refs: None,
+                files: None,
+                tags: None,
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                text: None,
+                author: None,
+                commit: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(full["arc_id"], arc["id"]);
+        assert_eq!(full["arc_phase"], "design");
     }
 
     #[test]
