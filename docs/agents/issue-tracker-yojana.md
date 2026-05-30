@@ -39,7 +39,7 @@ Use `summary` for quick status checks. Use `working` when you need acceptance cr
 yojana_query project="<slug>" status="<status>" category="<cat>" tag="<tag>"
 ```
 
-All parameters are optional. Omit `project` for cross-project queries. Each result includes `ready` and `blocked` flags.
+All parameters are optional. Omit `project` for cross-project queries. Each result is keyed by `human_id` (`project-slug/N`) and includes `ready`/`blocked` flags plus `blocked_by` (also human_ids). `yojana_query`/`yojana_ready` rows are slim — no raw UUIDs; use the `human_id` for follow-up calls. `arc` (`project-slug/~N`) groups results by phase.
 
 ### Find ready tasks
 
