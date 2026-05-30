@@ -54,7 +54,7 @@ impl YojanaServer {
         Parameters(args): Parameters<ProjectArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::project::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
@@ -65,18 +65,18 @@ impl YojanaServer {
         Parameters(args): Parameters<ArcArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::arc::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
-        description = "Create, get, update, or comment on tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change), comment (requires id, text; optional author). Supports acceptance_criteria, decisions, context_refs as JSON arrays. Optional arc_id + arc_phase to assign task to an arc phase."
+        description = "Create, get, update, or comment on tasks. Actions: create (requires project, title), get (requires id — UUID or 'project-slug/N'), update (requires id, plus fields to change), comment (requires id, text; optional author). create/update return a slim ack {id, human_id, status, title}; use action=get (or yojana_context) for full detail. acceptance_criteria, decisions, context_refs are JSON arrays. The string detail fields (category, slice_type, implementation_plan, execution_record, reproduction, root_cause) accept null to clear. arc_id + arc_phase must be provided together to assign a task to an arc phase. commit is a SHA shorthand that appends a git:commit context_ref (use with update, typically alongside status=done)."
     )]
     pub async fn yojana_task(
         &self,
         Parameters(args): Parameters<TaskArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::task::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
@@ -87,7 +87,7 @@ impl YojanaServer {
         Parameters(args): Parameters<EdgeArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::edge::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
@@ -98,7 +98,7 @@ impl YojanaServer {
         Parameters(args): Parameters<QueryArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::query::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
@@ -109,7 +109,7 @@ impl YojanaServer {
         Parameters(args): Parameters<ReadyArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::ready::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 
     #[tool(
@@ -120,7 +120,7 @@ impl YojanaServer {
         Parameters(args): Parameters<ContextArgs>,
     ) -> Result<String, ErrorData> {
         let out = tools::context::handle(&self.db, args).map_err(err_to_rmcp)?;
-        serde_json::to_string_pretty(&out).map_err(json_to_rmcp)
+        serde_json::to_string(&out).map_err(json_to_rmcp)
     }
 }
 
