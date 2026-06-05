@@ -4,6 +4,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::db::{EdgeRow, HistoryEntry, TaskRow};
+use crate::tools::context_ref::{ContextRef, RefType};
 
 pub const VALID_SHAPES: &[&str] = &["summary", "working", "planning", "agent", "review"];
 
@@ -34,7 +35,7 @@ pub struct WorkingBundle {
     pub decisions: Vec<serde_json::Value>,
     pub neighbors: Vec<SummaryBundle>,
     pub recent_messages: Vec<serde_json::Value>,
-    pub context_refs: Vec<serde_json::Value>,
+    pub context_refs: Vec<ContextRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arc_info: Option<ArcInfo>,
 }
@@ -117,7 +118,7 @@ pub fn working(
         decisions: json_array(&task.decisions),
         neighbors: neighbor_summaries,
         recent_messages: recent,
-        context_refs: json_array(&task.context_refs),
+        context_refs: ContextRef::parse_array(&task.context_refs),
         arc_info,
     }
 }
@@ -130,7 +131,7 @@ pub struct PlanningBundle {
     pub decisions: Vec<serde_json::Value>,
     pub neighbors: Vec<SummaryBundle>,
     pub recent_messages: Vec<serde_json::Value>,
-    pub context_refs: Vec<serde_json::Value>,
+    pub context_refs: Vec<ContextRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arc_info: Option<ArcInfo>,
     pub prior_phase_decisions: Vec<serde_json::Value>,
@@ -185,7 +186,7 @@ pub fn planning(
         decisions: json_array(&task.decisions),
         neighbors: neighbor_summaries,
         recent_messages: recent,
-        context_refs: json_array(&task.context_refs),
+        context_refs: ContextRef::parse_array(&task.context_refs),
         arc_info,
         prior_phase_decisions: prior_decisions,
         prior_phase_execution_records: prior_records,
@@ -235,23 +236,23 @@ pub struct ReviewBundle {
     pub acceptance_criteria: Vec<serde_json::Value>,
     pub decisions: Vec<serde_json::Value>,
     pub implementation_plan: Option<String>,
-    pub git_refs: Vec<serde_json::Value>,
-    pub doc_refs: Vec<serde_json::Value>,
-    pub other_refs: Vec<serde_json::Value>,
+    pub git_refs: Vec<ContextRef>,
+    pub doc_refs: Vec<ContextRef>,
+    pub other_refs: Vec<ContextRef>,
     pub neighbors: Vec<SummaryBundle>,
 }
 
 pub fn review(task: &TaskRow, neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)]) -> ReviewBundle {
-    let all_refs = json_array(&task.context_refs);
+    let all_refs = ContextRef::parse_array(&task.context_refs);
     let mut git_refs = Vec::new();
     let mut doc_refs = Vec::new();
     let mut other_refs = Vec::new();
 
-    for r in &all_refs {
-        match r.get("type").and_then(|t| t.as_str()) {
-            Some(t) if t.starts_with("git:") => git_refs.push(r.clone()),
-            Some(t) if t.starts_with("doc:") => doc_refs.push(r.clone()),
-            _ => other_refs.push(r.clone()),
+    for r in all_refs {
+        match r.ref_type {
+            RefType::GitCommit | RefType::GitRange => git_refs.push(r),
+            RefType::DocPath => doc_refs.push(r),
+            _ => other_refs.push(r),
         }
     }
 

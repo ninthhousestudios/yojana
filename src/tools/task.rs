@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
+use crate::tools::context_ref::{ContextRef, RefType};
 
 fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
 where
@@ -13,17 +14,6 @@ where
 }
 
 const VALID_CATEGORIES: &[&str] = &["bug", "enhancement", "experiment"];
-const VALID_REF_TYPES: &[&str] = &[
-    "smriti:hash",
-    "smriti:path",
-    "sutra:symbol",
-    "kosha:citation",
-    "yojana:task",
-    "chitta:memory",
-    "doc:path",
-    "git:commit",
-    "git:range",
-];
 const VALID_SLICE_TYPES: &[&str] = &["AFK", "HITL"];
 
 // Field-level docs are intentionally omitted: schemars serializes them into
@@ -52,7 +42,7 @@ pub struct TaskArgs {
     #[serde(default)]
     pub decisions: Option<Vec<serde_json::Value>>,
     #[serde(default)]
-    pub context_refs: Option<Vec<serde_json::Value>>,
+    pub context_refs: Option<Vec<ContextRef>>,
     #[serde(default)]
     pub files: Option<Vec<String>>,
     #[serde(default)]
@@ -95,7 +85,7 @@ pub struct TaskOutput {
     pub execution_record: Option<String>,
     pub reproduction: Option<String>,
     pub root_cause: Option<String>,
-    pub context_refs: Vec<serde_json::Value>,
+    pub context_refs: Vec<ContextRef>,
     pub files: Vec<String>,
     pub tags: Vec<String>,
     pub history: Vec<HistoryEntry>,
@@ -129,7 +119,7 @@ impl From<TaskRow> for TaskOutput {
             execution_record: row.execution_record,
             reproduction: row.reproduction,
             root_cause: row.root_cause,
-            context_refs: json_array(&row.context_refs),
+            context_refs: ContextRef::parse_array(&row.context_refs),
             files: serde_json::from_str(&row.files).unwrap_or_default(),
             tags: serde_json::from_str(&row.tags).unwrap_or_default(),
             history: serde_json::from_str(&row.history).unwrap_or_default(),
@@ -175,24 +165,6 @@ fn validate_slice_type(st: &str) -> Result<(), YojanaError> {
             "invalid slice_type '{st}'; valid: {}",
             VALID_SLICE_TYPES.join(", ")
         )));
-    }
-    Ok(())
-}
-
-fn validate_context_refs(refs: &[serde_json::Value]) -> Result<(), YojanaError> {
-    for r in refs {
-        let ref_type = r.get("type").and_then(|t| t.as_str()).ok_or_else(|| {
-            YojanaError::InvalidInput("context_ref must have a 'type' string".into())
-        })?;
-        if !VALID_REF_TYPES.contains(&ref_type) {
-            return Err(YojanaError::InvalidInput(format!(
-                "unknown context_ref type '{ref_type}'; valid: {}",
-                VALID_REF_TYPES.join(", ")
-            )));
-        }
-        r.get("value").and_then(|v| v.as_str()).ok_or_else(|| {
-            YojanaError::InvalidInput("context_ref must have a 'value' string".into())
-        })?;
     }
     Ok(())
 }
@@ -256,7 +228,6 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 validate_slice_type(st)?;
             }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
-            validate_context_refs(refs)?;
             let (project_id, project_slug) = resolve_project(db, project)?;
             let (arc_uuid, arc_phase) = resolve_arc_assignment(
                 db,
@@ -312,9 +283,6 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             if let Some(Some(ref st)) = args.slice_type {
                 validate_slice_type(st)?;
             }
-            if let Some(ref refs) = args.context_refs {
-                validate_context_refs(refs)?;
-            }
             let (arc_id_update, arc_phase_update) =
                 match (args.arc_id.as_deref(), args.arc_phase.as_deref()) {
                     (None, None) => (None, None),
@@ -346,16 +314,20 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             // context_ref. Combines with any explicit context_refs the caller
             // also passed (those take precedence as the base list).
             let merged_context_refs = if let Some(ref sha) = args.commit {
-                let mut refs = match args.context_refs {
+                let mut refs: Vec<ContextRef> = match args.context_refs {
                     Some(ref existing) => existing.clone(),
                     None => {
                         let task = db
                             .get_task(id)?
                             .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
-                        serde_json::from_str(&task.context_refs).unwrap_or_default()
+                        ContextRef::parse_array(&task.context_refs)
                     }
                 };
-                refs.push(serde_json::json!({"type": "git:commit", "value": sha}));
+                refs.push(ContextRef {
+                    ref_type: RefType::GitCommit,
+                    value: sha.clone(),
+                    label: None,
+                });
                 Some(refs)
             } else {
                 args.context_refs
@@ -426,10 +398,11 @@ mod tests {
             est_tokens
         );
         // Guards the yojana/32 schema diet: the hot-path schema reloads several
-        // times per long session, so keep it lean.
+        // times per long session, so keep it lean. Budget raised from 450→550
+        // in yojana/34 to accommodate the typed ContextRef item schema.
         assert!(
-            est_tokens <= 450,
-            "TaskArgs schema grew to ~{est_tokens} tokens (>450); did a field description sneak back in?"
+            est_tokens <= 550,
+            "TaskArgs schema grew to ~{est_tokens} tokens (>550); did a field description sneak back in?"
         );
     }
 

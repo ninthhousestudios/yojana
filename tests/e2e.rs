@@ -178,7 +178,7 @@ fn full_flow_v0() {
     );
     assert_eq!(working_b.recent_messages[0]["author"], "agent");
     assert_eq!(working_b.context_refs.len(), 1);
-    assert_eq!(working_b.context_refs[0]["type"], "git:commit");
+    assert_eq!(working_b.context_refs[0].ref_type, yojana::tools::context_ref::RefType::GitCommit);
 
     // 11. Query by status=done — only A
     let done_tasks = db

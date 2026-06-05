@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::db::{ArcRow, ArcUpdates, CreateArcParams, Db, HistoryEntry};
 use crate::error::YojanaError;
+use crate::tools::context_ref::ContextRef;
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -25,7 +26,7 @@ pub struct ArcArgs {
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
-    pub context_refs: Option<Vec<serde_json::Value>>,
+    pub context_refs: Option<Vec<ContextRef>>,
     #[serde(default)]
     pub phase: Option<String>,
     #[serde(default)]
@@ -46,7 +47,7 @@ pub struct ArcOutput {
     pub status: String,
     pub phases: Vec<serde_json::Value>,
     pub tags: Vec<String>,
-    pub context_refs: Vec<serde_json::Value>,
+    pub context_refs: Vec<ContextRef>,
     pub history: Vec<HistoryEntry>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -66,7 +67,7 @@ impl From<ArcRow> for ArcOutput {
             status: row.status,
             phases: serde_json::from_str(&row.phases).unwrap_or_default(),
             tags: serde_json::from_str(&row.tags).unwrap_or_default(),
-            context_refs: serde_json::from_str(&row.context_refs).unwrap_or_default(),
+            context_refs: ContextRef::parse_array(&row.context_refs),
             history: serde_json::from_str(&row.history).unwrap_or_default(),
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -592,9 +593,11 @@ mod tests {
         create_arc(&db);
 
         let mut args = arc_args("update", "proj/~1");
-        args.context_refs = Some(vec![
-            serde_json::json!({"type": "doc:path", "value": "foo.md"}),
-        ]);
+        args.context_refs = Some(vec![ContextRef {
+            ref_type: crate::tools::context_ref::RefType::DocPath,
+            value: "foo.md".into(),
+            label: None,
+        }]);
         handle(&db, args).unwrap();
         let updated = get_full(&db, "proj/~1");
         let history = updated["history"].as_array().unwrap();

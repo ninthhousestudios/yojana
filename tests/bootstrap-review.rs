@@ -187,7 +187,7 @@ fn bootstrap_v0_review() {
     }
     let s06_review = context::review(&s06_task, &s06_neighbors);
     assert_eq!(s06_review.git_refs.len(), 1);
-    assert_eq!(s06_review.git_refs[0]["value"], "7c9671b");
+    assert_eq!(s06_review.git_refs[0].value, "7c9671b");
     assert_eq!(s06_review.neighbors.len(), 3); // s05, s07, s08
 
     // Print one review bundle to show it works
