@@ -154,15 +154,15 @@ Cross-service pointers, jsonb array of typed records sharing the manas-wide ref 
 
 ```jsonc
 [
-  {"type": "doc:path",      "value": "docs/adr/0007",        "as_of": 1714780000000},
-  {"type": "chitta:memory", "value": "abc123def...",         "as_of": 1714780000000},
-  {"type": "sutra:symbol",  "value": "my::module::Foo",      "as_of": 1714780000000},
-  {"type": "smriti:hash",   "value": "<blake3>",             "as_of": 1714780000000},
-  {"type": "smriti:path",   "value": "/path/to/file.rs",     "as_of": 1714780000000}
+  {"type": "doc:path",      "value": "docs/adr/0007",    "label": "ADR 7"},
+  {"type": "chitta:memory", "value": "abc123def..."},
+  {"type": "sutra:symbol",  "value": "my::module::Foo"},
+  {"type": "smriti:hash",   "value": "<blake3>"},
+  {"type": "git:commit",    "value": "7c9671b"}
 ]
 ```
 
-Allowlisted types: `smriti:hash`, `smriti:path`, `sutra:symbol`, `kosha:citation`, `yojana:task`, `chitta:memory`, `doc:path`. Path types are second-class — prefer `smriti:hash` or `sutra:symbol` when available so refs survive moves and renames.
+Each item has required `type` (enum) and `value` (string), plus optional `label`. The `type` enum and item schema are exposed in the MCP tool JSON Schema so agents see the allowlist without guessing. Allowlisted types: `smriti:hash`, `smriti:path`, `sutra:symbol`, `kosha:citation`, `yojana:task`, `chitta:memory`, `doc:path`, `git:commit`, `git:range`. Path types are second-class — prefer `smriti:hash` or `sutra:symbol` when available so refs survive moves and renames.
 
 Yojana validates the shape but does not resolve refs. Resolution happens in **manas-cli** (per principle 9 — every cross-tier compound op lives in manas-cli, never inside a subsystem server). Yojana's binary stays a pure task-graph server.
 
