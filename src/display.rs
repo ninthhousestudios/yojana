@@ -213,7 +213,10 @@ pub fn format_task_detail(
         out.push_str(&format!("Slice:    {}\n", st));
     }
     if let (Some(arc_info), Some(phase)) = (arc, &t.arc_phase) {
-        out.push_str(&format!("Arc:      {} — {}\n", arc_info.human_id, arc_info.title));
+        out.push_str(&format!(
+            "Arc:      {} — {}\n",
+            arc_info.human_id, arc_info.title
+        ));
         let phase_status = arc_info.phase_status(phase);
         out.push_str(&format!(
             "Phase:    {} ({})  {}\n",

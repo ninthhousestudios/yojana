@@ -225,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
             let project = db
                 .get_project(None, Some(&identifier))?
                 .ok_or_else(|| anyhow::anyhow!("project '{}' not found", identifier))?;
+            let children = db.list_projects(None, Some(Some(&project.id)), None, None)?;
             let project_ids = db.project_ids_with_descendants(&project.id)?;
             let arc_map: HashMap<uuid::Uuid, ArcDisplayInfo> = db
                 .list_arcs_for_projects(&project_ids)?
@@ -238,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(chrono::Utc::now().timestamp_millis() - DONE_RECENT_WINDOW_MS)
             };
             let filter = TaskQueryFilter {
-                project_ids: Some(project_ids),
+                project_ids: Some(vec![project.id]),
                 status,
                 category,
                 include_terminal_after: cutoff,
@@ -254,6 +255,10 @@ async fn main() -> anyhow::Result<()> {
                 if !active.is_empty() || recent_terminal.is_empty() {
                     println!("Active");
                     println!("{}", display::format_tasks_list(&active, &arc_map));
+                    if !children.is_empty() {
+                        println!("\nWorkstreams:");
+                        println!("{}", display::format_projects_list(&children));
+                    }
                 }
                 if !recent_terminal.is_empty() {
                     if !active.is_empty() {
@@ -436,13 +441,7 @@ async fn main() -> anyhow::Result<()> {
 
             print!(
                 "{}",
-                display::format_arc_tree(
-                    &arc_display,
-                    &arc_tasks,
-                    &forest,
-                    &standalone,
-                    &task_map
-                )
+                display::format_arc_tree(&arc_display, &arc_tasks, &forest, &standalone, &task_map)
             );
             Ok(())
         }
