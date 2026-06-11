@@ -281,7 +281,7 @@ mod tests {
         let err = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("Bad task".into()),
@@ -318,7 +318,7 @@ mod tests {
         let err = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("Bad task".into()),
@@ -355,7 +355,7 @@ mod tests {
         let err = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("Bad task".into()),
@@ -391,7 +391,7 @@ mod tests {
         let task = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("Design doc".into()),
@@ -420,7 +420,7 @@ mod tests {
         let full = task::handle(
             &db,
             task::TaskArgs {
-                action: "get".into(),
+                action: task::TaskAction::Get,
                 id: Some(task["human_id"].as_str().unwrap().to_string()),
                 project: None,
                 title: None,
@@ -459,7 +459,7 @@ mod tests {
         let err = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("other".into()),
                 title: Some("Cross-project".into()),
@@ -497,7 +497,7 @@ mod tests {
         let task = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("other".into()),
                 title: Some("Other task".into()),
@@ -527,7 +527,7 @@ mod tests {
         let err = task::handle(
             &db,
             task::TaskArgs {
-                action: "update".into(),
+                action: task::TaskAction::Update,
                 id: Some(task_id),
                 project: None,
                 title: None,

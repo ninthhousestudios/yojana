@@ -5,11 +5,41 @@ use uuid::Uuid;
 use crate::db::{Db, EdgeRow};
 use crate::error::YojanaError;
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EdgeAction {
+    Create,
+    Delete,
+    List,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeType {
+    DependsOn,
+    RelatesTo,
+    Supersedes,
+    Refines,
+    MotivatedBy,
+}
+
+impl AsRef<str> for EdgeType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::DependsOn => "depends_on",
+            Self::RelatesTo => "relates_to",
+            Self::Supersedes => "supersedes",
+            Self::Refines => "refines",
+            Self::MotivatedBy => "motivated_by",
+        }
+    }
+}
+
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EdgeArgs {
-    pub action: String,
+    pub action: EdgeAction,
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -17,7 +47,7 @@ pub struct EdgeArgs {
     #[serde(default)]
     pub target: Option<String>,
     #[serde(default)]
-    pub edge_type: Option<String>,
+    pub edge_type: Option<EdgeType>,
     #[serde(default)]
     pub note: Option<String>,
     #[serde(default)]
@@ -55,8 +85,8 @@ fn resolve_task_id(db: &Db, identifier: &str) -> Result<Uuid, YojanaError> {
 }
 
 pub fn handle(db: &Db, args: EdgeArgs) -> Result<serde_json::Value, YojanaError> {
-    match args.action.as_str() {
-        "create" => {
+    match args.action {
+        EdgeAction::Create => {
             let source = args
                 .source
                 .as_deref()
@@ -67,16 +97,20 @@ pub fn handle(db: &Db, args: EdgeArgs) -> Result<serde_json::Value, YojanaError>
                 .ok_or_else(|| YojanaError::InvalidInput("target required for create".into()))?;
             let edge_type = args
                 .edge_type
-                .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("edge_type required for create".into()))?;
 
             let source_id = resolve_task_id(db, source)?;
             let target_id = resolve_task_id(db, target)?;
 
-            let row = db.create_edge(source_id, target_id, edge_type, args.note.as_deref())?;
+            let row = db.create_edge(
+                source_id,
+                target_id,
+                edge_type.as_ref(),
+                args.note.as_deref(),
+            )?;
             Ok(serde_json::to_value(EdgeOutput::from(row))?)
         }
-        "delete" => {
+        EdgeAction::Delete => {
             let id_str = args
                 .id
                 .as_deref()
@@ -86,7 +120,7 @@ pub fn handle(db: &Db, args: EdgeArgs) -> Result<serde_json::Value, YojanaError>
             db.delete_edge(&id)?;
             Ok(serde_json::json!({"deleted": id_str}))
         }
-        "list" => {
+        EdgeAction::List => {
             let task_ident = args
                 .task
                 .as_deref()
@@ -96,8 +130,5 @@ pub fn handle(db: &Db, args: EdgeArgs) -> Result<serde_json::Value, YojanaError>
             let out: Vec<EdgeOutput> = rows.into_iter().map(EdgeOutput::from).collect();
             Ok(serde_json::to_value(out)?)
         }
-        other => Err(YojanaError::InvalidInput(format!(
-            "unknown action '{other}'; valid: create, delete, list"
-        ))),
     }
 }

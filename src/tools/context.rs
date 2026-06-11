@@ -268,7 +268,7 @@ mod tests {
         task::handle(
             db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some(title.into()),
@@ -325,7 +325,7 @@ mod tests {
         task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("Plain task".into()),
@@ -375,7 +375,7 @@ mod tests {
         task::handle(
             &db,
             task::TaskArgs {
-                action: "update".into(),
+                action: task::TaskAction::Update,
                 id: Some(design_id.into()),
                 project: None,
                 title: None,
@@ -454,17 +454,17 @@ mod tests {
 
         // Mark design task done (needs-triage → in-progress → done)
         let t1_id = t1["human_id"].as_str().unwrap();
-        for next_status in &["in-progress", "done"] {
+        for next_status in [task::TaskStatus::InProgress, task::TaskStatus::Done] {
             task::handle(
                 &db,
                 task::TaskArgs {
-                    action: "update".into(),
+                    action: task::TaskAction::Update,
                     id: Some(t1_id.into()),
                     project: None,
                     title: None,
                     description: None,
                     category: None,
-                    status: Some((*next_status).into()),
+                    status: Some(next_status),
                     slice_type: None,
                     acceptance_criteria: None,
                     decisions: None,
@@ -517,7 +517,7 @@ mod tests {
         let ext = task::handle(
             &db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some("External blocker".into()),
@@ -549,11 +549,11 @@ mod tests {
         crate::tools::edge::handle(
             &db,
             crate::tools::edge::EdgeArgs {
-                action: "create".into(),
+                action: crate::tools::edge::EdgeAction::Create,
                 id: None,
                 source: Some(arc_task["human_id"].as_str().unwrap().into()),
                 target: Some(ext["human_id"].as_str().unwrap().into()),
-                edge_type: Some("depends_on".into()),
+                edge_type: Some(crate::tools::edge::EdgeType::DependsOn),
                 note: None,
                 task: None,
             },

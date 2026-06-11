@@ -182,13 +182,13 @@ mod tests {
         task::handle(
             db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some(title.into()),
                 description: None,
                 category: None,
-                status: Some("ready-for-agent".into()),
+                status: Some(task::TaskStatus::ReadyForAgent),
                 slice_type: None,
                 acceptance_criteria: None,
                 decisions: None,
@@ -213,13 +213,13 @@ mod tests {
         task::handle(
             db,
             task::TaskArgs {
-                action: "create".into(),
+                action: task::TaskAction::Create,
                 id: None,
                 project: Some("proj".into()),
                 title: Some(title.into()),
                 description: None,
                 category: None,
-                status: Some("ready-for-agent".into()),
+                status: Some(task::TaskStatus::ReadyForAgent),
                 slice_type: None,
                 acceptance_criteria: None,
                 decisions: None,

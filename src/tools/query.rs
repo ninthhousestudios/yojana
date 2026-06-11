@@ -172,13 +172,13 @@ mod tests {
 
     fn create_task(db: &Db, title: &str) -> String {
         let args = task::TaskArgs {
-            action: "create".into(),
+            action: task::TaskAction::Create,
             id: None,
             project: Some("proj".into()),
             title: Some(title.into()),
             description: None,
             category: None,
-            status: Some("ready-for-agent".into()),
+            status: Some(task::TaskStatus::ReadyForAgent),
             slice_type: None,
             acceptance_criteria: None,
             decisions: None,
@@ -226,7 +226,10 @@ mod tests {
         let rows = query_all(&db);
         let row = &rows[0];
         assert!(row.get("id").is_none(), "raw UUID should be gone");
-        assert!(row.get("project_slug").is_none(), "project_slug is redundant");
+        assert!(
+            row.get("project_slug").is_none(),
+            "project_slug is redundant"
+        );
         assert_eq!(row["human_id"], "proj/1");
     }
 
@@ -238,11 +241,11 @@ mod tests {
         edge::handle(
             &db,
             edge::EdgeArgs {
-                action: "create".into(),
+                action: edge::EdgeAction::Create,
                 id: None,
                 source: Some(blocked.clone()),
                 target: Some(blocker.clone()),
-                edge_type: Some("depends_on".into()),
+                edge_type: Some(edge::EdgeType::DependsOn),
                 note: None,
                 task: None,
             },
@@ -260,7 +263,11 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
-        assert_eq!(blocked_by, vec![blocker], "blocker rendered as human_id, not UUID");
+        assert_eq!(
+            blocked_by,
+            vec![blocker],
+            "blocker rendered as human_id, not UUID"
+        );
         assert_eq!(blocked_row["blocked"], true);
     }
 }

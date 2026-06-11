@@ -6,15 +6,85 @@ use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
 use crate::tools::context_ref::{ContextRef, RefType};
 
-fn deserialize_double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
+    T: Deserialize<'de>,
     D: Deserializer<'de>,
 {
-    Option::<String>::deserialize(deserializer).map(Some)
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
-const VALID_CATEGORIES: &[&str] = &["bug", "enhancement", "experiment"];
-const VALID_SLICE_TYPES: &[&str] = &["AFK", "HITL"];
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskAction {
+    Create,
+    Get,
+    Update,
+    Comment,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskCategory {
+    Bug,
+    Enhancement,
+    Experiment,
+}
+
+impl AsRef<str> for TaskCategory {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Bug => "bug",
+            Self::Enhancement => "enhancement",
+            Self::Experiment => "experiment",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+pub enum SliceType {
+    #[serde(rename = "AFK", alias = "afk")]
+    Afk,
+    #[serde(rename = "HITL", alias = "hitl")]
+    Hitl,
+}
+
+impl AsRef<str> for SliceType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Afk => "AFK",
+            Self::Hitl => "HITL",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskStatus {
+    NeedsTriage,
+    NeedsInfo,
+    ReadyForAgent,
+    ReadyForHuman,
+    InProgress,
+    NeedsReview,
+    Done,
+    Wontfix,
+}
+
+impl AsRef<str> for TaskStatus {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::NeedsTriage => "needs-triage",
+            Self::NeedsInfo => "needs-info",
+            Self::ReadyForAgent => "ready-for-agent",
+            Self::ReadyForHuman => "ready-for-human",
+            Self::InProgress => "in-progress",
+            Self::NeedsReview => "needs-review",
+            Self::Done => "done",
+            Self::Wontfix => "wontfix",
+        }
+    }
+}
 
 // Field-level docs are intentionally omitted: schemars serializes them into
 // the tool schema, which reloads several times per long session. Cross-cutting
@@ -22,7 +92,7 @@ const VALID_SLICE_TYPES: &[&str] = &["AFK", "HITL"];
 // once in the tool-level description in src/mcp.rs.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TaskArgs {
-    pub action: String,
+    pub action: TaskAction,
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -32,11 +102,11 @@ pub struct TaskArgs {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub category: Option<Option<String>>,
+    pub category: Option<Option<TaskCategory>>,
     #[serde(default)]
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub slice_type: Option<Option<String>>,
+    pub slice_type: Option<Option<SliceType>>,
     #[serde(default)]
     pub acceptance_criteria: Option<Vec<serde_json::Value>>,
     #[serde(default)]
@@ -149,26 +219,6 @@ fn slim_ack(row: &TaskRow) -> serde_json::Value {
     })
 }
 
-fn validate_category(cat: &str) -> Result<(), YojanaError> {
-    if !VALID_CATEGORIES.contains(&cat) {
-        return Err(YojanaError::InvalidInput(format!(
-            "invalid category '{cat}'; valid: {}",
-            VALID_CATEGORIES.join(", ")
-        )));
-    }
-    Ok(())
-}
-
-fn validate_slice_type(st: &str) -> Result<(), YojanaError> {
-    if !VALID_SLICE_TYPES.contains(&st) {
-        return Err(YojanaError::InvalidInput(format!(
-            "invalid slice_type '{st}'; valid: {}",
-            VALID_SLICE_TYPES.join(", ")
-        )));
-    }
-    Ok(())
-}
-
 fn to_json(val: &(impl serde::Serialize + ?Sized)) -> Result<String, YojanaError> {
     serde_json::to_string(val).map_err(YojanaError::Json)
 }
@@ -211,8 +261,8 @@ fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError
 }
 
 pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError> {
-    match args.action.as_str() {
-        "create" => {
+    match args.action {
+        TaskAction::Create => {
             let project = args
                 .project
                 .as_deref()
@@ -221,12 +271,6 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 .title
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("title required for create".into()))?;
-            if let Some(Some(ref cat)) = args.category {
-                validate_category(cat)?;
-            }
-            if let Some(Some(ref st)) = args.slice_type {
-                validate_slice_type(st)?;
-            }
             let refs = args.context_refs.as_deref().unwrap_or(&[]);
             let (project_id, project_slug) = resolve_project(db, project)?;
             let (arc_uuid, arc_phase) = resolve_arc_assignment(
@@ -241,9 +285,9 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 project_slug,
                 title: title.to_string(),
                 description: args.description.unwrap_or_default(),
-                category: args.category.flatten(),
-                status: args.status.clone(),
-                slice_type: args.slice_type.flatten(),
+                category: args.category.flatten().map(|c| c.as_ref().to_string()),
+                status: args.status.map(|s| s.as_ref().to_string()),
+                slice_type: args.slice_type.flatten().map(|s| s.as_ref().to_string()),
                 acceptance_criteria: to_json(&args.acceptance_criteria.unwrap_or_default())?,
                 decisions: to_json(&args.decisions.unwrap_or_default())?,
                 context_refs: to_json(refs)?,
@@ -259,7 +303,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let row = db.create_task(params)?;
             Ok(slim_ack(&row))
         }
-        "get" => {
+        TaskAction::Get => {
             let id = args
                 .id
                 .as_deref()
@@ -272,17 +316,11 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             output.messages = db.get_conversation_messages(&task_id)?;
             Ok(serde_json::to_value(output)?)
         }
-        "update" => {
+        TaskAction::Update => {
             let id = args
                 .id
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("id required for update".into()))?;
-            if let Some(Some(ref cat)) = args.category {
-                validate_category(cat)?;
-            }
-            if let Some(Some(ref st)) = args.slice_type {
-                validate_slice_type(st)?;
-            }
             let (arc_id_update, arc_phase_update) =
                 match (args.arc_id.as_deref(), args.arc_phase.as_deref()) {
                     (None, None) => (None, None),
@@ -336,10 +374,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             let updates = TaskUpdates {
                 title: args.title,
                 description: args.description,
-                category: args.category,
-                status: args.status,
+                category: args.category.map(|o| o.map(|c| c.as_ref().to_string())),
+                status: args.status.map(|s| s.as_ref().to_string()),
                 force_status: false,
-                slice_type: args.slice_type,
+                slice_type: args.slice_type.map(|o| o.map(|s| s.as_ref().to_string())),
                 acceptance_criteria: args.acceptance_criteria.map(|v| to_json(&v)).transpose()?,
                 decisions: args.decisions.map(|v| to_json(&v)).transpose()?,
                 implementation_plan: args.implementation_plan,
@@ -358,7 +396,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             }
             Ok(slim_ack(&row))
         }
-        "comment" => {
+        TaskAction::Comment => {
             let id = args
                 .id
                 .as_deref()
@@ -376,9 +414,6 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 "ts": message.get("ts"),
             }))
         }
-        other => Err(YojanaError::InvalidInput(format!(
-            "unknown action '{other}'; valid: create, get, update, comment"
-        ))),
     }
 }
 
@@ -406,9 +441,9 @@ mod tests {
         );
     }
 
-    fn plain_blank() -> TaskArgs {
+    fn plain_blank(action: TaskAction) -> TaskArgs {
         TaskArgs {
-            action: String::new(),
+            action,
             id: None,
             project: None,
             title: None,
@@ -458,7 +493,7 @@ mod tests {
         args.arc_phase = None;
         let created = handle(&db, args).unwrap();
         let id = created["human_id"].as_str().unwrap().to_string();
-        let out = update_status(&db, &id, "in-progress");
+        let out = update_status(&db, &id, TaskStatus::InProgress);
         assert_eq!(keys(&out), vec!["human_id", "id", "status", "title"]);
         assert_eq!(out["status"], "in-progress");
     }
@@ -474,10 +509,10 @@ mod tests {
         let out = handle(
             &db,
             TaskArgs {
-                action: "comment".into(),
+                action: TaskAction::Comment,
                 id: Some(id),
                 text: Some("a fairly long comment body that we do not want echoed back".into()),
-                ..plain_blank()
+                ..plain_blank(TaskAction::Comment)
             },
         )
         .unwrap();
@@ -496,14 +531,20 @@ mod tests {
         let out = handle(
             &db,
             TaskArgs {
-                action: "get".into(),
+                action: TaskAction::Get,
                 id: Some(id),
-                ..plain_blank()
+                ..plain_blank(TaskAction::Get)
             },
         )
         .unwrap();
         // get must still surface the heavy fields (no regression for review/planning).
-        for field in ["description", "history", "messages", "acceptance_criteria", "tags"] {
+        for field in [
+            "description",
+            "history",
+            "messages",
+            "acceptance_criteria",
+            "tags",
+        ] {
             assert!(out.get(field).is_some(), "get should include {field}");
         }
     }
@@ -540,57 +581,21 @@ mod tests {
 
     fn task_args_create(title: &str, phase: &str) -> TaskArgs {
         TaskArgs {
-            action: "create".into(),
-            id: None,
             project: Some("proj".into()),
             title: Some(title.into()),
-            description: None,
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: None,
-            decisions: None,
-            context_refs: None,
-            files: None,
-            tags: None,
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            text: None,
-            author: None,
-            commit: None,
             arc_id: Some("proj/~1".into()),
             arc_phase: Some(phase.into()),
+            ..plain_blank(TaskAction::Create)
         }
     }
 
-    fn update_status(db: &Db, id: &str, status: &str) -> serde_json::Value {
+    fn update_status(db: &Db, id: &str, status: TaskStatus) -> serde_json::Value {
         handle(
             db,
             TaskArgs {
-                action: "update".into(),
                 id: Some(id.into()),
-                project: None,
-                title: None,
-                description: None,
-                category: None,
-                status: Some(status.into()),
-                slice_type: None,
-                acceptance_criteria: None,
-                decisions: None,
-                context_refs: None,
-                files: None,
-                tags: None,
-                implementation_plan: None,
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                text: None,
-                author: None,
-                commit: None,
-                arc_id: None,
-                arc_phase: None,
+                status: Some(status),
+                ..plain_blank(TaskAction::Update)
             },
         )
         .unwrap()
@@ -603,8 +608,8 @@ mod tests {
         let t = handle(&db, task_args_create("Design doc", "design")).unwrap();
         let tid = t["human_id"].as_str().unwrap();
 
-        update_status(&db, tid, "in-progress");
-        update_status(&db, tid, "done");
+        update_status(&db, tid, TaskStatus::InProgress);
+        update_status(&db, tid, TaskStatus::Done);
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
         let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases).unwrap();
