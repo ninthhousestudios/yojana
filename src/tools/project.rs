@@ -185,7 +185,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
                 .ok_or_else(|| YojanaError::InvalidInput("title required for create".into()))?;
             let description = args.description.as_deref().unwrap_or("");
             let parent_id = resolve_parent_id(db, slug)?;
-            let row = db.create_project(slug, title, description, parent_id)?;
+            let row = db.create_project(slug, title, description, parent_id, "agent")?;
             Ok(slim_ack(&row))
         }
         "get" => {
@@ -248,6 +248,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
                     status: args.status,
                     handoff,
                 },
+                "agent",
             )?;
             Ok(slim_ack(&row))
         }

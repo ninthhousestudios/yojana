@@ -297,6 +297,7 @@ async fn main() -> anyhow::Result<()> {
                 &title,
                 description.as_deref().unwrap_or(""),
                 parent_id,
+                "josh",
             )?;
             println!("{}", project.slug);
             Ok(())
@@ -326,7 +327,7 @@ async fn main() -> anyhow::Result<()> {
                     category: category.map(|c| if c.is_empty() { None } else { Some(c) }),
                     ..Default::default()
                 };
-                let updated = db.update_task(&id, updates)?;
+                let updated = db.update_task(&id, updates, "josh")?;
                 let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
                 println!("{} updated", human_id);
             } else {
@@ -334,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
                     status,
                     ..Default::default()
                 };
-                let updated = db.update_project(None, Some(&id), updates)?;
+                let updated = db.update_project(None, Some(&id), updates, "josh")?;
                 println!("{} updated", updated.slug);
             }
             Ok(())
@@ -385,7 +386,7 @@ async fn main() -> anyhow::Result<()> {
                 arc_id: None,
                 arc_phase: None,
             };
-            let row = db.create_task(params)?;
+            let row = db.create_task(params, "josh")?;
             println!("{}/{}", row.project_slug, row.sequence_number);
             Ok(())
         }
@@ -470,7 +471,7 @@ async fn main() -> anyhow::Result<()> {
                 },
                 ..Default::default()
             };
-            let updated = db.update_task(&id, updates)?;
+            let updated = db.update_task(&id, updates, "josh")?;
             let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
             match commit {
                 Some(sha) => println!("{} → done (commit {})", human_id, sha),

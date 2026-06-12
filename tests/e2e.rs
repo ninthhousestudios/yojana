@@ -9,78 +9,87 @@ fn full_flow_v0() {
 
     // 2. Create project
     let project = db
-        .create_project("yojana", "Yojana task graph server", "", None)
+        .create_project("yojana", "Yojana task graph server", "", None, "test")
         .unwrap();
     assert_eq!(project.slug, "yojana");
 
     // 3. Create three tasks: A (no deps), B (depends_on A), C (depends_on B)
     let task_a = db
-        .create_task(CreateTaskParams {
-            project_id: project.id,
-            project_slug: project.slug.clone(),
-            title: "Task A".into(),
-            description: "First task".into(),
-            category: Some("enhancement".into()),
-            status: None,
-            slice_type: Some("AFK".into()),
-            acceptance_criteria: r#"[{"text":"A works","done":false}]"#.into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: r#"["infra"]"#.into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        .create_task(
+            CreateTaskParams {
+                project_id: project.id,
+                project_slug: project.slug.clone(),
+                title: "Task A".into(),
+                description: "First task".into(),
+                category: Some("enhancement".into()),
+                status: None,
+                slice_type: Some("AFK".into()),
+                acceptance_criteria: r#"[{"text":"A works","done":false}]"#.into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: r#"["infra"]"#.into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
     let task_b = db
-        .create_task(CreateTaskParams {
-            project_id: project.id,
-            project_slug: project.slug.clone(),
-            title: "Task B".into(),
-            description: "Second task".into(),
-            category: Some("enhancement".into()),
-            status: None,
-            slice_type: Some("AFK".into()),
-            acceptance_criteria: r#"[{"text":"B works","done":false}]"#.into(),
-            decisions: r#"[{"text":"use approach X"}]"#.into(),
-            context_refs: r#"[{"type":"git:commit","value":"abc123"}]"#.into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        .create_task(
+            CreateTaskParams {
+                project_id: project.id,
+                project_slug: project.slug.clone(),
+                title: "Task B".into(),
+                description: "Second task".into(),
+                category: Some("enhancement".into()),
+                status: None,
+                slice_type: Some("AFK".into()),
+                acceptance_criteria: r#"[{"text":"B works","done":false}]"#.into(),
+                decisions: r#"[{"text":"use approach X"}]"#.into(),
+                context_refs: r#"[{"type":"git:commit","value":"abc123"}]"#.into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
     let task_c = db
-        .create_task(CreateTaskParams {
-            project_id: project.id,
-            project_slug: project.slug.clone(),
-            title: "Task C".into(),
-            description: "Third task".into(),
-            category: Some("enhancement".into()),
-            status: None,
-            slice_type: Some("HITL".into()),
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        .create_task(
+            CreateTaskParams {
+                project_id: project.id,
+                project_slug: project.slug.clone(),
+                title: "Task C".into(),
+                description: "Third task".into(),
+                category: Some("enhancement".into()),
+                status: None,
+                slice_type: Some("HITL".into()),
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
     assert_eq!(task_a.sequence_number, 1);
@@ -106,6 +115,7 @@ fn full_flow_v0() {
             status: Some("ready-for-agent".into()),
             ..Default::default()
         },
+        "test",
     )
     .unwrap();
     db.update_task(
@@ -114,6 +124,7 @@ fn full_flow_v0() {
             status: Some("in-progress".into()),
             ..Default::default()
         },
+        "test",
     )
     .unwrap();
     db.update_task(
@@ -122,6 +133,7 @@ fn full_flow_v0() {
             status: Some("done".into()),
             ..Default::default()
         },
+        "test",
     )
     .unwrap();
 
@@ -178,7 +190,10 @@ fn full_flow_v0() {
     );
     assert_eq!(working_b.recent_messages[0]["author"], "agent");
     assert_eq!(working_b.context_refs.len(), 1);
-    assert_eq!(working_b.context_refs[0].ref_type, yojana::tools::context_ref::RefType::GitCommit);
+    assert_eq!(
+        working_b.context_refs[0].ref_type,
+        yojana::tools::context_ref::RefType::GitCommit
+    );
 
     // 11. Query by status=done — only A
     let done_tasks = db

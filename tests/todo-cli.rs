@@ -30,7 +30,7 @@ fn todo_creates_needs_triage_task_and_prints_slug() {
     let db_path = unique_db();
     {
         let db = seed(&db_path);
-        db.create_project("demo", "Demo", "", None).unwrap();
+        db.create_project("demo", "Demo", "", None, "test").unwrap();
     }
 
     let out = cli()
@@ -60,7 +60,8 @@ fn todo_with_message_flag_populates_description() {
     let db_path = unique_db();
     {
         let db = seed(&db_path);
-        db.create_project("demo2", "Demo2", "", None).unwrap();
+        db.create_project("demo2", "Demo2", "", None, "test")
+            .unwrap();
     }
 
     let out = cli()
@@ -87,7 +88,8 @@ fn todo_reads_stdin_when_no_message_and_piped() {
     let db_path = unique_db();
     {
         let db = seed(&db_path);
-        db.create_project("demo3", "Demo3", "", None).unwrap();
+        db.create_project("demo3", "Demo3", "", None, "test")
+            .unwrap();
     }
 
     let mut child = cli()
@@ -142,8 +144,10 @@ fn todo_works_with_nested_project_slug() {
     let db_path = unique_db();
     {
         let db = seed(&db_path);
-        let parent = db.create_project("demo4", "Demo4", "", None).unwrap();
-        db.create_project("demo4/sub", "Sub", "", Some(parent.id))
+        let parent = db
+            .create_project("demo4", "Demo4", "", None, "test")
+            .unwrap();
+        db.create_project("demo4/sub", "Sub", "", Some(parent.id), "test")
             .unwrap();
     }
 

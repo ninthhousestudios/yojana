@@ -16,6 +16,8 @@ pub struct HistoryEntry {
     pub ts: i64,
     pub kind: String,
     pub payload: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
 }
 
 // --- Project types ---
@@ -628,6 +630,7 @@ impl Db {
         title: &str,
         description: &str,
         parent_id: Option<Uuid>,
+        actor: &str,
     ) -> Result<ProjectRow, YojanaError> {
         let conn = self.conn.lock();
         let id = Uuid::now_v7();
@@ -636,6 +639,7 @@ impl Db {
             ts: now,
             kind: "project_created".into(),
             payload: serde_json::json!({}),
+            actor: Some(actor.to_string()),
         }])?;
 
         let parent_bytes = parent_id.map(|pid| pid.as_bytes().to_vec());
@@ -843,6 +847,7 @@ impl Db {
         id: Option<&str>,
         slug: Option<&str>,
         updates: ProjectUpdates,
+        actor: &str,
     ) -> Result<ProjectRow, YojanaError> {
         let conn = self.conn.lock();
         let project = resolve_project(&conn, id, slug)?;
@@ -855,6 +860,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "title", "from": project.title, "to": new_title}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -864,6 +870,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "description"}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -879,6 +886,7 @@ impl Db {
                     ts: now,
                     kind: "status_changed".into(),
                     payload: serde_json::json!({"from": project.status, "to": new_status}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -897,6 +905,7 @@ impl Db {
                 ts: now,
                 kind: "handoff_updated".into(),
                 payload,
+                actor: Some(actor.to_string()),
             });
         }
 
@@ -950,7 +959,11 @@ impl Db {
 
     // --- Task methods ---
 
-    pub fn create_task(&self, params: CreateTaskParams) -> Result<TaskRow, YojanaError> {
+    pub fn create_task(
+        &self,
+        params: CreateTaskParams,
+        actor: &str,
+    ) -> Result<TaskRow, YojanaError> {
         let conn = self.conn.lock();
         let id = Uuid::now_v7();
         let now = chrono::Utc::now().timestamp_millis();
@@ -959,6 +972,7 @@ impl Db {
             ts: now,
             kind: "task_created".into(),
             payload: serde_json::json!({"sequence_number": seq, "project": params.project_slug}),
+            actor: Some(actor.to_string()),
         }])?;
 
         let status = params.status.as_deref().unwrap_or("needs-triage");
@@ -1023,6 +1037,7 @@ impl Db {
         &self,
         identifier: &str,
         updates: TaskUpdates,
+        actor: &str,
     ) -> Result<TaskRow, YojanaError> {
         let conn = self.conn.lock();
         let task = resolve_task(&conn, identifier)?;
@@ -1045,6 +1060,7 @@ impl Db {
                     ts: now,
                     kind: "status_changed".into(),
                     payload: serde_json::json!({"from": task.status, "to": new_status}),
+                    actor: Some(actor.to_string()),
                 });
                 if new_status == "done" {
                     new_completed_at = Some(now);
@@ -1059,6 +1075,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "title", "from": task.title, "to": new_title}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1149,7 +1166,7 @@ impl Db {
 
     // --- Arc methods ---
 
-    pub fn create_arc(&self, params: CreateArcParams) -> Result<ArcRow, YojanaError> {
+    pub fn create_arc(&self, params: CreateArcParams, actor: &str) -> Result<ArcRow, YojanaError> {
         let input_phases: Vec<serde_json::Value> = serde_json::from_str(&params.phases)?;
         validate_phases(&input_phases)?;
         let phases_with_defaults = apply_phase_defaults(&input_phases);
@@ -1163,6 +1180,7 @@ impl Db {
             ts: now,
             kind: "arc_created".into(),
             payload: serde_json::json!({"sequence_number": seq, "project": params.project_slug}),
+            actor: Some(actor.to_string()),
         }])?;
 
         conn.execute(
@@ -1201,10 +1219,7 @@ impl Db {
         }
     }
 
-    pub fn list_arcs_for_projects(
-        &self,
-        project_ids: &[Uuid],
-    ) -> Result<Vec<ArcRow>, YojanaError> {
+    pub fn list_arcs_for_projects(&self, project_ids: &[Uuid]) -> Result<Vec<ArcRow>, YojanaError> {
         let conn = self.conn.lock();
         if project_ids.is_empty() {
             return Ok(Vec::new());
@@ -1230,7 +1245,12 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn update_arc(&self, identifier: &str, updates: ArcUpdates) -> Result<ArcRow, YojanaError> {
+    pub fn update_arc(
+        &self,
+        identifier: &str,
+        updates: ArcUpdates,
+        actor: &str,
+    ) -> Result<ArcRow, YojanaError> {
         let conn = self.conn.lock();
         let arc = resolve_arc(&conn, identifier)?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -1242,6 +1262,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1257,6 +1278,7 @@ impl Db {
                     ts: now,
                     kind: "status_changed".into(),
                     payload: serde_json::json!({"from": arc.status, "to": new_status}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1266,6 +1288,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "description"}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1275,6 +1298,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "tags"}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1284,6 +1308,7 @@ impl Db {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "context_refs"}),
+                    actor: Some(actor.to_string()),
                 });
             }
         }
@@ -1348,6 +1373,7 @@ impl Db {
         phase_name: Option<&str>,
         skip: bool,
         note: Option<String>,
+        actor: &str,
     ) -> Result<ArcRow, YojanaError> {
         let mut conn = self.conn.lock();
         let tx = conn
@@ -1409,6 +1435,7 @@ impl Db {
             ts: now,
             kind: "phase_advanced".into(),
             payload,
+            actor: Some(actor.to_string()),
         });
 
         let phases_json = serde_json::to_string(&phases)?;
@@ -1430,6 +1457,7 @@ impl Db {
         identifier: &str,
         phase_name: &str,
         note: Option<String>,
+        actor: &str,
     ) -> Result<ArcRow, YojanaError> {
         let mut conn = self.conn.lock();
         let tx = conn
@@ -1470,6 +1498,7 @@ impl Db {
             ts: now,
             kind: "phase_reverted".into(),
             payload,
+            actor: Some(actor.to_string()),
         });
 
         let phases_json = serde_json::to_string(&phases)?;
@@ -1486,7 +1515,7 @@ impl Db {
         Ok(result)
     }
 
-    pub fn try_auto_advance_phase(&self, task_id: &Uuid) -> Result<bool, YojanaError> {
+    pub fn try_auto_advance_phase(&self, task_id: &Uuid, actor: &str) -> Result<bool, YojanaError> {
         let mut conn = self.conn.lock();
 
         let task = get_task_by_uuid(&conn, task_id)?
@@ -1582,6 +1611,7 @@ impl Db {
                 "to": "completed",
                 "trigger_task": format!("{}/{}", task.project_slug, task.sequence_number),
             }),
+            actor: Some(actor.to_string()),
         });
 
         let phases_json = serde_json::to_string(&phases)?;
@@ -1984,7 +2014,7 @@ mod tests {
     fn create_and_get_project() {
         let db = test_db();
         let p = db
-            .create_project("test-proj", "Test Project", "A test", None)
+            .create_project("test-proj", "Test Project", "A test", None, "test")
             .unwrap();
         assert_eq!(p.slug, "test-proj");
         assert_eq!(p.title, "Test Project");
@@ -2004,16 +2034,19 @@ mod tests {
     #[test]
     fn slug_uniqueness() {
         let db = test_db();
-        db.create_project("dupe", "First", "", None).unwrap();
-        let err = db.create_project("dupe", "Second", "", None).unwrap_err();
+        db.create_project("dupe", "First", "", None, "test")
+            .unwrap();
+        let err = db
+            .create_project("dupe", "Second", "", None, "test")
+            .unwrap_err();
         assert!(matches!(err, YojanaError::Conflict(_)));
     }
 
     #[test]
     fn list_with_status_filter() {
         let db = test_db();
-        db.create_project("a", "A", "", None).unwrap();
-        db.create_project("b", "B", "", None).unwrap();
+        db.create_project("a", "A", "", None, "test").unwrap();
+        db.create_project("b", "B", "", None, "test").unwrap();
 
         let all = db.list_projects(None, None, None, None).unwrap();
         assert_eq!(all.len(), 2);
@@ -2028,7 +2061,9 @@ mod tests {
     #[test]
     fn update_records_history() {
         let db = test_db();
-        let p = db.create_project("test", "Original", "desc", None).unwrap();
+        let p = db
+            .create_project("test", "Original", "desc", None, "test")
+            .unwrap();
 
         let updated = db
             .update_project(
@@ -2038,6 +2073,7 @@ mod tests {
                     title: Some("New Title".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -2052,7 +2088,7 @@ mod tests {
     #[test]
     fn update_status_records_history() {
         let db = test_db();
-        db.create_project("test", "Test", "", None).unwrap();
+        db.create_project("test", "Test", "", None, "test").unwrap();
 
         let updated = db
             .update_project(
@@ -2062,6 +2098,7 @@ mod tests {
                     status: Some("paused".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -2083,33 +2120,37 @@ mod tests {
 
     fn create_test_task(db: &Db, project_slug: &str, title: &str) -> TaskRow {
         let p = db.get_project(None, Some(project_slug)).unwrap().unwrap();
-        db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug,
-            title: title.to_string(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug,
+                title: title.to_string(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap()
     }
 
     #[test]
     fn create_task_with_sequence_numbers() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
 
         let t1 = create_test_task(&db, "proj", "First");
         let t2 = create_test_task(&db, "proj", "Second");
@@ -2125,17 +2166,48 @@ mod tests {
     #[test]
     fn create_task_respects_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let t = db
-            .create_task(CreateTaskParams {
+            .create_task(
+                CreateTaskParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "With status".into(),
+                    description: String::new(),
+                    category: None,
+                    status: Some("ready-for-agent".into()),
+                    slice_type: None,
+                    acceptance_criteria: "[]".into(),
+                    decisions: "[]".into(),
+                    context_refs: "[]".into(),
+                    files: "[]".into(),
+                    tags: "[]".into(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
+            .unwrap();
+        assert_eq!(t.status, "ready-for-agent");
+
+        let t2 = create_test_task(&db, "proj", "No status");
+        assert_eq!(t2.status, "needs-triage");
+
+        let err = db.create_task(
+            CreateTaskParams {
                 project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "With status".into(),
+                project_slug: p.slug,
+                title: "Bad status".into(),
                 description: String::new(),
                 category: None,
-                status: Some("ready-for-agent".into()),
+                status: Some("bogus".into()),
                 slice_type: None,
                 acceptance_criteria: "[]".into(),
                 decisions: "[]".into(),
@@ -2148,33 +2220,9 @@ mod tests {
                 root_cause: None,
                 arc_id: None,
                 arc_phase: None,
-            })
-            .unwrap();
-        assert_eq!(t.status, "ready-for-agent");
-
-        let t2 = create_test_task(&db, "proj", "No status");
-        assert_eq!(t2.status, "needs-triage");
-
-        let err = db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug,
-            title: "Bad status".into(),
-            description: String::new(),
-            category: None,
-            status: Some("bogus".into()),
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        });
+            },
+            "test",
+        );
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains("unknown status"));
     }
@@ -2182,8 +2230,9 @@ mod tests {
     #[test]
     fn sequence_numbers_are_per_project() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "", None).unwrap();
-        db.create_project("beta", "Beta", "", None).unwrap();
+        db.create_project("alpha", "Alpha", "", None, "test")
+            .unwrap();
+        db.create_project("beta", "Beta", "", None, "test").unwrap();
 
         let a1 = create_test_task(&db, "alpha", "A1");
         let b1 = create_test_task(&db, "beta", "B1");
@@ -2197,7 +2246,8 @@ mod tests {
     #[test]
     fn get_task_by_uuid() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let fetched = db.get_task(&t.id.to_string()).unwrap().unwrap();
@@ -2208,7 +2258,8 @@ mod tests {
     #[test]
     fn get_task_by_slug_seq() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         create_test_task(&db, "proj", "First");
         let t2 = create_test_task(&db, "proj", "Second");
 
@@ -2220,7 +2271,8 @@ mod tests {
     #[test]
     fn update_task_partial() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Original");
 
         let updated = db
@@ -2231,6 +2283,7 @@ mod tests {
                     category: Some(Some("bug".into())),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -2242,7 +2295,9 @@ mod tests {
     #[test]
     fn json_round_trip() {
         let db = test_db();
-        let p = db.create_project("proj", "Project", "", None).unwrap();
+        let p = db
+            .create_project("proj", "Project", "", None, "test")
+            .unwrap();
 
         let ac = serde_json::to_string(&vec![
             serde_json::json!({"id": "1", "text": "it works", "done": false}),
@@ -2255,26 +2310,29 @@ mod tests {
         let tags = serde_json::to_string(&vec!["infra", "urgent"]).unwrap();
 
         let t = db
-            .create_task(CreateTaskParams {
-                project_id: p.id,
-                project_slug: p.slug,
-                title: "JSON test".into(),
-                description: String::new(),
-                category: Some("enhancement".into()),
-                status: None,
-                slice_type: Some("AFK".into()),
-                acceptance_criteria: ac,
-                decisions: "[]".into(),
-                context_refs: refs,
-                files: "[]".into(),
-                tags,
-                implementation_plan: Some("do the thing".into()),
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                arc_id: None,
-                arc_phase: None,
-            })
+            .create_task(
+                CreateTaskParams {
+                    project_id: p.id,
+                    project_slug: p.slug,
+                    title: "JSON test".into(),
+                    description: String::new(),
+                    category: Some("enhancement".into()),
+                    status: None,
+                    slice_type: Some("AFK".into()),
+                    acceptance_criteria: ac,
+                    decisions: "[]".into(),
+                    context_refs: refs,
+                    files: "[]".into(),
+                    tags,
+                    implementation_plan: Some("do the thing".into()),
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
             .unwrap();
 
         let fetched = db.get_task(&t.id.to_string()).unwrap().unwrap();
@@ -2298,7 +2356,8 @@ mod tests {
     #[test]
     fn cascade_delete_project_removes_tasks() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let task_id = t.id.to_string();
 
@@ -2323,7 +2382,8 @@ mod tests {
     #[test]
     fn valid_status_transition_succeeds() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         assert_eq!(t.status, "needs-triage");
 
@@ -2334,6 +2394,7 @@ mod tests {
                     status: Some("ready-for-agent".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(updated.status, "ready-for-agent");
@@ -2351,7 +2412,8 @@ mod tests {
     #[test]
     fn invalid_status_transition_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let err = db
@@ -2361,6 +2423,7 @@ mod tests {
                     status: Some("done".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap_err();
         assert!(err.to_string().contains("invalid transition"));
@@ -2369,7 +2432,8 @@ mod tests {
     #[test]
     fn noop_status_update_skips_validation() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let updated = db
@@ -2379,6 +2443,7 @@ mod tests {
                     status: Some("needs-triage".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         let history: Vec<HistoryEntry> = serde_json::from_str(&updated.history).unwrap();
@@ -2392,7 +2457,8 @@ mod tests {
     #[test]
     fn non_status_update_bypasses_state_machine() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let updated = db
@@ -2402,6 +2468,7 @@ mod tests {
                     title: Some("New title".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(updated.title, "New title");
@@ -2411,7 +2478,8 @@ mod tests {
     #[test]
     fn done_is_terminal_except_reopen() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
 
@@ -2421,6 +2489,7 @@ mod tests {
                 status: Some("ready-for-agent".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
         db.update_task(
@@ -2429,6 +2498,7 @@ mod tests {
                 status: Some("in-progress".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
         db.update_task(
@@ -2437,6 +2507,7 @@ mod tests {
                 status: Some("done".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
 
@@ -2447,6 +2518,7 @@ mod tests {
                     status: Some("in-progress".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap_err();
         assert!(err.to_string().contains("invalid transition"));
@@ -2458,6 +2530,7 @@ mod tests {
                     status: Some("needs-triage".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(reopened.status, "needs-triage");
@@ -2468,7 +2541,8 @@ mod tests {
     #[test]
     fn create_and_list_edges() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2490,7 +2564,8 @@ mod tests {
     #[test]
     fn delete_edge() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2512,7 +2587,8 @@ mod tests {
     #[test]
     fn duplicate_edge_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2526,7 +2602,8 @@ mod tests {
     #[test]
     fn same_pair_different_types_allowed() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2540,7 +2617,8 @@ mod tests {
     #[test]
     fn cycle_detection_rejects_direct_cycle() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2554,7 +2632,8 @@ mod tests {
     #[test]
     fn cycle_detection_rejects_multi_hop() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
         let t3 = create_test_task(&db, "proj", "Task 3");
@@ -2570,7 +2649,8 @@ mod tests {
     #[test]
     fn non_dependency_edges_skip_cycle_check() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2581,7 +2661,8 @@ mod tests {
     #[test]
     fn invalid_edge_type_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
 
@@ -2592,8 +2673,9 @@ mod tests {
     #[test]
     fn cross_project_edges() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "", None).unwrap();
-        db.create_project("beta", "Beta", "", None).unwrap();
+        db.create_project("alpha", "Alpha", "", None, "test")
+            .unwrap();
+        db.create_project("beta", "Beta", "", None, "test").unwrap();
         let t1 = create_test_task(&db, "alpha", "Task A");
         let t2 = create_test_task(&db, "beta", "Task B");
 
@@ -2605,7 +2687,8 @@ mod tests {
     #[test]
     fn cascade_delete_task_removes_edges() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Task 1");
         let t2 = create_test_task(&db, "proj", "Task 2");
         let t3 = create_test_task(&db, "proj", "Task 3");
@@ -2638,6 +2721,7 @@ mod tests {
                     status: Some((*s).into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         }
@@ -2646,7 +2730,8 @@ mod tests {
     #[test]
     fn list_tasks_no_filter() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         create_test_task(&db, "proj", "A");
         create_test_task(&db, "proj", "B");
 
@@ -2657,7 +2742,8 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "A");
         create_test_task(&db, "proj", "B");
 
@@ -2676,8 +2762,10 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_project() {
         let db = test_db();
-        let p1 = db.create_project("alpha", "Alpha", "", None).unwrap();
-        db.create_project("beta", "Beta", "", None).unwrap();
+        let p1 = db
+            .create_project("alpha", "Alpha", "", None, "test")
+            .unwrap();
+        db.create_project("beta", "Beta", "", None, "test").unwrap();
         create_test_task(&db, "alpha", "A");
         create_test_task(&db, "beta", "B");
 
@@ -2694,28 +2782,32 @@ mod tests {
     #[test]
     fn list_tasks_filter_by_tag() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
-        db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug.clone(),
-            title: "Tagged".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: serde_json::to_string(&vec!["infra"]).unwrap(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Tagged".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: serde_json::to_string(&vec!["infra"]).unwrap(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
         create_test_task(&db, "proj", "Untagged");
 
@@ -2732,8 +2824,9 @@ mod tests {
     #[test]
     fn cross_project_query() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "", None).unwrap();
-        db.create_project("beta", "Beta", "", None).unwrap();
+        db.create_project("alpha", "Alpha", "", None, "test")
+            .unwrap();
+        db.create_project("beta", "Beta", "", None, "test").unwrap();
         create_test_task(&db, "alpha", "A");
         create_test_task(&db, "beta", "B");
 
@@ -2744,7 +2837,8 @@ mod tests {
     #[test]
     fn depends_on_with_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "A");
         let t2 = create_test_task(&db, "proj", "B");
 
@@ -2760,7 +2854,8 @@ mod tests {
     #[test]
     fn ready_detection_no_deps() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "A");
         let id = t.id.to_string();
         advance_to(&db, &id, &["ready-for-agent"]);
@@ -2772,7 +2867,8 @@ mod tests {
     #[test]
     fn ready_detection_deps_done() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Depends");
         let t2 = create_test_task(&db, "proj", "Dependency");
 
@@ -2791,7 +2887,8 @@ mod tests {
     #[test]
     fn ready_detection_deps_not_done() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Depends");
         let t2 = create_test_task(&db, "proj", "Dependency");
 
@@ -2804,7 +2901,8 @@ mod tests {
     #[test]
     fn ready_detection_diamond() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let leaf = create_test_task(&db, "proj", "Leaf");
         let mid1 = create_test_task(&db, "proj", "Mid1");
         let mid2 = create_test_task(&db, "proj", "Mid2");
@@ -2832,7 +2930,8 @@ mod tests {
     #[test]
     fn append_and_get_conversation() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
 
         let msgs = db.get_conversation_messages(&t.id).unwrap();
@@ -2859,7 +2958,8 @@ mod tests {
     #[test]
     fn conversation_cascade_on_task_delete() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         db.append_conversation_message(&t.id, "msg", None).unwrap();
 
@@ -2881,7 +2981,8 @@ mod tests {
     #[test]
     fn context_summary_integration() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Main Task");
         let t2 = create_test_task(&db, "proj", "Dep");
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
@@ -2897,7 +2998,8 @@ mod tests {
     #[test]
     fn context_working_integration() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t1 = create_test_task(&db, "proj", "Main");
         let t2 = create_test_task(&db, "proj", "Neighbor");
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
@@ -2928,28 +3030,32 @@ mod tests {
     #[test]
     fn tag_filter_no_wildcard_false_positive() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
-        db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug.clone(),
-            title: "Has a%b tag".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: serde_json::to_string(&vec!["a%b"]).unwrap(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Has a%b tag".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: serde_json::to_string(&vec!["a%b"]).unwrap(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
         let matches = db
@@ -2972,29 +3078,33 @@ mod tests {
     #[test]
     fn clear_nullable_fields_to_null() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         let t = db
-            .create_task(CreateTaskParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Clearable".into(),
-                description: String::new(),
-                category: Some("bug".into()),
-                status: None,
-                slice_type: Some("AFK".into()),
-                acceptance_criteria: "[]".into(),
-                decisions: "[]".into(),
-                context_refs: "[]".into(),
-                files: "[]".into(),
-                tags: "[]".into(),
-                implementation_plan: Some("plan".into()),
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                arc_id: None,
-                arc_phase: None,
-            })
+            .create_task(
+                CreateTaskParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Clearable".into(),
+                    description: String::new(),
+                    category: Some("bug".into()),
+                    status: None,
+                    slice_type: Some("AFK".into()),
+                    acceptance_criteria: "[]".into(),
+                    decisions: "[]".into(),
+                    context_refs: "[]".into(),
+                    files: "[]".into(),
+                    tags: "[]".into(),
+                    implementation_plan: Some("plan".into()),
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
             .unwrap();
         assert_eq!(t.category.as_deref(), Some("bug"));
 
@@ -3007,6 +3117,7 @@ mod tests {
                     implementation_plan: Some(None),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(cleared.category, None);
@@ -3017,7 +3128,8 @@ mod tests {
     #[test]
     fn project_status_validation_rejects_typo() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let err = db
             .update_project(
                 None,
@@ -3026,6 +3138,7 @@ mod tests {
                     status: Some("actve".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap_err();
         assert!(err.to_string().contains("invalid project status"));
@@ -3034,7 +3147,8 @@ mod tests {
     #[test]
     fn project_status_validation_accepts_valid() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db
             .update_project(
                 None,
@@ -3043,6 +3157,7 @@ mod tests {
                     status: Some("paused".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(p.status, "paused");
@@ -3051,7 +3166,8 @@ mod tests {
     #[test]
     fn self_edge_rejected() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Solo");
         let err = db.create_edge(t.id, t.id, "relates_to", None).unwrap_err();
         assert!(err.to_string().contains("self-edges not allowed"));
@@ -3075,7 +3191,8 @@ mod tests {
     #[test]
     fn in_progress_renamed_to_hyphen() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
         advance_to(&db, &id, &["ready-for-agent", "in-progress"]);
@@ -3086,7 +3203,8 @@ mod tests {
     #[test]
     fn pagination_limits_results() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         for i in 0..5 {
             create_test_task(&db, "proj", &format!("Task {i}"));
         }
@@ -3114,7 +3232,7 @@ mod tests {
     fn pagination_projects() {
         let db = test_db();
         for i in 0..5 {
-            db.create_project(&format!("p{i}"), &format!("Project {i}"), "", None)
+            db.create_project(&format!("p{i}"), &format!("Project {i}"), "", None, "test")
                 .unwrap();
         }
 
@@ -3128,9 +3246,17 @@ mod tests {
     #[test]
     fn create_project_with_parent() {
         let db = test_db();
-        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let parent = db
+            .create_project("chitta", "Chitta", "", None, "test")
+            .unwrap();
         let child = db
-            .create_project("chitta/research", "Chitta Research", "", Some(parent.id))
+            .create_project(
+                "chitta/research",
+                "Chitta Research",
+                "",
+                Some(parent.id),
+                "test",
+            )
             .unwrap();
         assert_eq!(child.parent_id, Some(parent.id));
         assert_eq!(child.slug, "chitta/research");
@@ -3139,10 +3265,13 @@ mod tests {
     #[test]
     fn list_projects_roots_only() {
         let db = test_db();
-        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
-        db.create_project("chitta/research", "Research", "", Some(parent.id))
+        let parent = db
+            .create_project("chitta", "Chitta", "", None, "test")
             .unwrap();
-        db.create_project("yojana", "Yojana", "", None).unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id), "test")
+            .unwrap();
+        db.create_project("yojana", "Yojana", "", None, "test")
+            .unwrap();
 
         let roots = db.list_projects(None, Some(None), None, None).unwrap();
         assert_eq!(roots.len(), 2);
@@ -3152,12 +3281,15 @@ mod tests {
     #[test]
     fn list_projects_children_of_parent() {
         let db = test_db();
-        let parent = db.create_project("chitta", "Chitta", "", None).unwrap();
-        db.create_project("chitta/core", "Core", "", Some(parent.id))
+        let parent = db
+            .create_project("chitta", "Chitta", "", None, "test")
             .unwrap();
-        db.create_project("chitta/research", "Research", "", Some(parent.id))
+        db.create_project("chitta/core", "Core", "", Some(parent.id), "test")
             .unwrap();
-        db.create_project("yojana", "Yojana", "", None).unwrap();
+        db.create_project("chitta/research", "Research", "", Some(parent.id), "test")
+            .unwrap();
+        db.create_project("yojana", "Yojana", "", None, "test")
+            .unwrap();
 
         let children = db
             .list_projects(None, Some(Some(&parent.id)), None, None)
@@ -3171,18 +3303,21 @@ mod tests {
     #[test]
     fn descendant_project_ids() {
         let db = test_db();
-        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let root = db
+            .create_project("chitta", "Chitta", "", None, "test")
+            .unwrap();
         let child = db
-            .create_project("chitta/research", "Research", "", Some(root.id))
+            .create_project("chitta/research", "Research", "", Some(root.id), "test")
             .unwrap();
         db.create_project(
             "chitta/research/embed",
             "Embed Research",
             "",
             Some(child.id),
+            "test",
         )
         .unwrap();
-        db.create_project("chitta/core", "Core", "", Some(root.id))
+        db.create_project("chitta/core", "Core", "", Some(root.id), "test")
             .unwrap();
 
         let descendants = db.list_descendant_project_ids(&root.id).unwrap();
@@ -3195,33 +3330,38 @@ mod tests {
     #[test]
     fn task_query_rolls_up_descendants() {
         let db = test_db();
-        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
+        let root = db
+            .create_project("chitta", "Chitta", "", None, "test")
+            .unwrap();
         let child = db
-            .create_project("chitta/research", "Research", "", Some(root.id))
+            .create_project("chitta/research", "Research", "", Some(root.id), "test")
             .unwrap();
 
         create_test_task(&db, "chitta", "Root task");
         // Create task in child project
-        db.create_task(CreateTaskParams {
-            project_id: child.id,
-            project_slug: "chitta/research".into(),
-            title: "Child task".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: child.id,
+                project_slug: "chitta/research".into(),
+                title: "Child task".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
         let all_ids = db.project_ids_with_descendants(&root.id).unwrap();
@@ -3247,30 +3387,35 @@ mod tests {
     #[test]
     fn parse_task_id_with_nested_slug() {
         let db = test_db();
-        let root = db.create_project("chitta", "Chitta", "", None).unwrap();
-        let child = db
-            .create_project("chitta/research", "Research", "", Some(root.id))
+        let root = db
+            .create_project("chitta", "Chitta", "", None, "test")
             .unwrap();
-        db.create_task(CreateTaskParams {
-            project_id: child.id,
-            project_slug: "chitta/research".into(),
-            title: "Nested task".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: None,
-            arc_phase: None,
-        })
+        let child = db
+            .create_project("chitta/research", "Research", "", Some(root.id), "test")
+            .unwrap();
+        db.create_task(
+            CreateTaskParams {
+                project_id: child.id,
+                project_slug: "chitta/research".into(),
+                title: "Nested task".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
         .unwrap();
 
         let task = db.get_task("chitta/research/1").unwrap().unwrap();
@@ -3282,7 +3427,7 @@ mod tests {
     fn handoff_set_and_clear() {
         let db = test_db();
         let proj = db
-            .create_project("htest", "Handoff Test", "", None)
+            .create_project("htest", "Handoff Test", "", None, "test")
             .unwrap();
         assert!(proj.handoff.is_none());
 
@@ -3294,6 +3439,7 @@ mod tests {
                     handoff: Some(Some("pick up auth work".into())),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert_eq!(updated.handoff.as_deref(), Some("pick up auth work"));
@@ -3306,6 +3452,7 @@ mod tests {
                     handoff: Some(None),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
         assert!(cleared.handoff.is_none());
@@ -3314,8 +3461,8 @@ mod tests {
     #[test]
     fn get_handoffs_returns_only_set() {
         let db = test_db();
-        db.create_project("ha", "A", "", None).unwrap();
-        db.create_project("hb", "B", "", None).unwrap();
+        db.create_project("ha", "A", "", None, "test").unwrap();
+        db.create_project("hb", "B", "", None, "test").unwrap();
         db.update_project(
             None,
             Some("ha"),
@@ -3323,6 +3470,7 @@ mod tests {
                 handoff: Some(Some("handoff a".into())),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
 
@@ -3337,9 +3485,11 @@ mod tests {
     #[test]
     fn get_handoffs_includes_descendants() {
         let db = test_db();
-        let root = db.create_project("parent", "Parent", "", None).unwrap();
+        let root = db
+            .create_project("parent", "Parent", "", None, "test")
+            .unwrap();
         let _child = db
-            .create_project("parent/child", "Child", "", Some(root.id))
+            .create_project("parent/child", "Child", "", Some(root.id), "test")
             .unwrap();
         db.update_project(
             None,
@@ -3348,6 +3498,7 @@ mod tests {
                 handoff: Some(Some("child handoff".into())),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
 
@@ -3364,7 +3515,8 @@ mod tests {
     #[test]
     fn create_arc_and_get_by_slug() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let phases = serde_json::to_string(&serde_json::json!([
@@ -3375,15 +3527,18 @@ mod tests {
         .unwrap();
 
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Feature X".into(),
-                description: "Build feature X".into(),
-                phases,
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Feature X".into(),
+                    description: "Build feature X".into(),
+                    phases,
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         assert_eq!(arc.sequence_number, 1);
@@ -3412,45 +3567,55 @@ mod tests {
     #[test]
     fn arc_sequence_numbers_are_per_project() {
         let db = test_db();
-        db.create_project("alpha", "Alpha", "", None).unwrap();
-        db.create_project("beta", "Beta", "", None).unwrap();
+        db.create_project("alpha", "Alpha", "", None, "test")
+            .unwrap();
+        db.create_project("beta", "Beta", "", None, "test").unwrap();
         let pa = db.get_project(None, Some("alpha")).unwrap().unwrap();
         let pb = db.get_project(None, Some("beta")).unwrap().unwrap();
 
         let phases = r#"[{"name":"do"}]"#.to_string();
 
         let a1 = db
-            .create_arc(CreateArcParams {
-                project_id: pa.id,
-                project_slug: pa.slug.clone(),
-                title: "A1".into(),
-                description: String::new(),
-                phases: phases.clone(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: pa.id,
+                    project_slug: pa.slug.clone(),
+                    title: "A1".into(),
+                    description: String::new(),
+                    phases: phases.clone(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
         let b1 = db
-            .create_arc(CreateArcParams {
-                project_id: pb.id,
-                project_slug: pb.slug.clone(),
-                title: "B1".into(),
-                description: String::new(),
-                phases: phases.clone(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: pb.id,
+                    project_slug: pb.slug.clone(),
+                    title: "B1".into(),
+                    description: String::new(),
+                    phases: phases.clone(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
         let a2 = db
-            .create_arc(CreateArcParams {
-                project_id: pa.id,
-                project_slug: pa.slug.clone(),
-                title: "A2".into(),
-                description: String::new(),
-                phases,
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: pa.id,
+                    project_slug: pa.slug.clone(),
+                    title: "A2".into(),
+                    description: String::new(),
+                    phases,
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         assert_eq!(a1.sequence_number, 1);
@@ -3461,19 +3626,23 @@ mod tests {
     #[test]
     fn update_arc_records_history() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Original".into(),
-                description: String::new(),
-                phases: r#"[{"name":"do"}]"#.into(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Original".into(),
+                    description: String::new(),
+                    phases: r#"[{"name":"do"}]"#.into(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         let updated = db
@@ -3484,6 +3653,7 @@ mod tests {
                     status: Some("paused".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -3499,18 +3669,22 @@ mod tests {
     #[test]
     fn update_arc_rejects_invalid_status() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
-        db.create_arc(CreateArcParams {
-            project_id: p.id,
-            project_slug: p.slug,
-            title: "Arc".into(),
-            description: String::new(),
-            phases: r#"[{"name":"do"}]"#.into(),
-            tags: "[]".into(),
-            context_refs: "[]".into(),
-        })
+        db.create_arc(
+            CreateArcParams {
+                project_id: p.id,
+                project_slug: p.slug,
+                title: "Arc".into(),
+                description: String::new(),
+                phases: r#"[{"name":"do"}]"#.into(),
+                tags: "[]".into(),
+                context_refs: "[]".into(),
+            },
+            "test",
+        )
         .unwrap();
 
         let err = db
@@ -3520,6 +3694,7 @@ mod tests {
                     status: Some("bogus".into()),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap_err();
         assert!(err.to_string().contains("invalid arc status"));
@@ -3528,42 +3703,49 @@ mod tests {
     #[test]
     fn task_with_arc_assignment() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Arc".into(),
-                description: String::new(),
-                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Arc".into(),
+                    description: String::new(),
+                    phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         let task = db
-            .create_task(CreateTaskParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Design doc".into(),
-                description: String::new(),
-                category: None,
-                status: None,
-                slice_type: None,
-                acceptance_criteria: "[]".into(),
-                decisions: "[]".into(),
-                context_refs: "[]".into(),
-                files: "[]".into(),
-                tags: "[]".into(),
-                implementation_plan: None,
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                arc_id: Some(arc.id),
-                arc_phase: Some("design".into()),
-            })
+            .create_task(
+                CreateTaskParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Design doc".into(),
+                    description: String::new(),
+                    category: None,
+                    status: None,
+                    slice_type: None,
+                    acceptance_criteria: "[]".into(),
+                    decisions: "[]".into(),
+                    context_refs: "[]".into(),
+                    files: "[]".into(),
+                    tags: "[]".into(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: Some(arc.id),
+                    arc_phase: Some("design".into()),
+                },
+                "test",
+            )
             .unwrap();
 
         assert_eq!(task.arc_id, Some(arc.id));
@@ -3578,19 +3760,23 @@ mod tests {
     #[test]
     fn task_update_arc_assignment() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Arc".into(),
-                description: String::new(),
-                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Arc".into(),
+                    description: String::new(),
+                    phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         let task = create_test_task(&db, "proj", "Task");
@@ -3604,6 +3790,7 @@ mod tests {
                     arc_phase: Some(Some("implement".into())),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -3619,6 +3806,7 @@ mod tests {
                     arc_phase: Some(None),
                     ..Default::default()
                 },
+                "test",
             )
             .unwrap();
 
@@ -3629,63 +3817,73 @@ mod tests {
     #[test]
     fn query_tasks_by_arc() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
 
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: p.slug.clone(),
-                title: "Arc".into(),
-                description: String::new(),
-                phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: p.slug.clone(),
+                    title: "Arc".into(),
+                    description: String::new(),
+                    phases: r#"[{"name":"design"},{"name":"implement"}]"#.into(),
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
 
         // Create tasks: 2 in arc, 1 outside
-        db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug.clone(),
-            title: "Design task".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: Some(arc.id),
-            arc_phase: Some("design".into()),
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Design task".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: Some(arc.id),
+                arc_phase: Some("design".into()),
+            },
+            "test",
+        )
         .unwrap();
-        db.create_task(CreateTaskParams {
-            project_id: p.id,
-            project_slug: p.slug.clone(),
-            title: "Impl task".into(),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: Some(arc.id),
-            arc_phase: Some("implement".into()),
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id: p.id,
+                project_slug: p.slug.clone(),
+                title: "Impl task".into(),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: Some(arc.id),
+                arc_phase: Some("implement".into()),
+            },
+            "test",
+        )
         .unwrap();
         create_test_task(&db, "proj", "Unrelated");
 
@@ -3704,7 +3902,8 @@ mod tests {
     // --- Auto-advance tests ---
 
     fn setup_arc_with_auto_gate(db: &Db) -> (Uuid, Uuid) {
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         let phases = serde_json::to_string(&serde_json::json!([
             {"name": "design", "gate": "auto"},
@@ -3712,40 +3911,46 @@ mod tests {
         ]))
         .unwrap();
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: "proj".into(),
-                title: "Test Arc".into(),
-                description: String::new(),
-                phases,
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: "proj".into(),
+                    title: "Test Arc".into(),
+                    description: String::new(),
+                    phases,
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
         (p.id, arc.id)
     }
 
     fn create_arc_task(db: &Db, project_id: Uuid, arc_id: Uuid, phase: &str) -> TaskRow {
-        db.create_task(CreateTaskParams {
-            project_id,
-            project_slug: "proj".into(),
-            title: format!("Task in {phase}"),
-            description: String::new(),
-            category: None,
-            status: None,
-            slice_type: None,
-            acceptance_criteria: "[]".into(),
-            decisions: "[]".into(),
-            context_refs: "[]".into(),
-            files: "[]".into(),
-            tags: "[]".into(),
-            implementation_plan: None,
-            execution_record: None,
-            reproduction: None,
-            root_cause: None,
-            arc_id: Some(arc_id),
-            arc_phase: Some(phase.into()),
-        })
+        db.create_task(
+            CreateTaskParams {
+                project_id,
+                project_slug: "proj".into(),
+                title: format!("Task in {phase}"),
+                description: String::new(),
+                category: None,
+                status: None,
+                slice_type: None,
+                acceptance_criteria: "[]".into(),
+                decisions: "[]".into(),
+                context_refs: "[]".into(),
+                files: "[]".into(),
+                tags: "[]".into(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: Some(arc_id),
+                arc_phase: Some(phase.into()),
+            },
+            "test",
+        )
         .unwrap()
     }
 
@@ -3762,7 +3967,7 @@ mod tests {
             &["in-progress", "done"],
         );
 
-        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
         assert!(result, "should have auto-advanced");
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
@@ -3779,7 +3984,7 @@ mod tests {
 
         advance_to(&db, &format!("proj/{}", t1.sequence_number), &["wontfix"]);
 
-        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
         assert!(result);
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
@@ -3800,7 +4005,7 @@ mod tests {
             &["in-progress", "done"],
         );
 
-        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
         assert!(!result, "should NOT advance — t2 still open");
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
@@ -3811,7 +4016,8 @@ mod tests {
     #[test]
     fn auto_advance_skipped_for_manual_gate() {
         let db = test_db();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         let p = db.get_project(None, Some("proj")).unwrap().unwrap();
         let phases = serde_json::to_string(&serde_json::json!([
             {"name": "design", "gate": "manual"},
@@ -3819,15 +4025,18 @@ mod tests {
         ]))
         .unwrap();
         let arc = db
-            .create_arc(CreateArcParams {
-                project_id: p.id,
-                project_slug: "proj".into(),
-                title: "Manual Arc".into(),
-                description: String::new(),
-                phases,
-                tags: "[]".into(),
-                context_refs: "[]".into(),
-            })
+            .create_arc(
+                CreateArcParams {
+                    project_id: p.id,
+                    project_slug: "proj".into(),
+                    title: "Manual Arc".into(),
+                    description: String::new(),
+                    phases,
+                    tags: "[]".into(),
+                    context_refs: "[]".into(),
+                },
+                "test",
+            )
             .unwrap();
         let t1 = create_arc_task(&db, p.id, arc.id, "design");
         advance_to(
@@ -3836,7 +4045,7 @@ mod tests {
             &["in-progress", "done"],
         );
 
-        let result = db.try_auto_advance_phase(&t1.id).unwrap();
+        let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
         assert!(!result, "manual gate should not auto-advance");
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
@@ -3851,29 +4060,32 @@ mod tests {
 
         // Create a fake task not in any arc to test the no-arc path
         let task = db
-            .create_task(CreateTaskParams {
-                project_id: _pid,
-                project_slug: "proj".into(),
-                title: "Plain task".into(),
-                description: String::new(),
-                category: None,
-                status: None,
-                slice_type: None,
-                acceptance_criteria: "[]".into(),
-                decisions: "[]".into(),
-                context_refs: "[]".into(),
-                files: "[]".into(),
-                tags: "[]".into(),
-                implementation_plan: None,
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                arc_id: None,
-                arc_phase: None,
-            })
+            .create_task(
+                CreateTaskParams {
+                    project_id: _pid,
+                    project_slug: "proj".into(),
+                    title: "Plain task".into(),
+                    description: String::new(),
+                    category: None,
+                    status: None,
+                    slice_type: None,
+                    acceptance_criteria: "[]".into(),
+                    decisions: "[]".into(),
+                    context_refs: "[]".into(),
+                    files: "[]".into(),
+                    tags: "[]".into(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
             .unwrap();
 
-        let result = db.try_auto_advance_phase(&task.id).unwrap();
+        let result = db.try_auto_advance_phase(&task.id, "test").unwrap();
         assert!(!result, "task without arc should return false");
     }
 
@@ -3888,7 +4100,7 @@ mod tests {
             &["in-progress", "done"],
         );
 
-        db.try_auto_advance_phase(&t1.id).unwrap();
+        db.try_auto_advance_phase(&t1.id, "test").unwrap();
 
         let arc = db.get_arc("proj/~1").unwrap().unwrap();
         let history: Vec<HistoryEntry> = serde_json::from_str(&arc.history).unwrap();

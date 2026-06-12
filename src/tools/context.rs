@@ -235,7 +235,8 @@ mod tests {
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         db
     }
 

@@ -18,26 +18,29 @@ fn make_task(
         .map(|c| serde_json::json!({"type": "git:commit", "value": c}))
         .collect();
 
-    db.create_task(CreateTaskParams {
-        project_id,
-        project_slug: "yojana".into(),
-        title: title.into(),
-        description: desc.into(),
-        category: Some("enhancement".into()),
-        status: None,
-        slice_type: Some("AFK".into()),
-        acceptance_criteria: serde_json::to_string(&ac).unwrap(),
-        decisions: "[]".into(),
-        context_refs: serde_json::to_string(&refs).unwrap(),
-        files: "[]".into(),
-        tags: "[]".into(),
-        implementation_plan: None,
-        execution_record: None,
-        reproduction: None,
-        root_cause: None,
-        arc_id: None,
-        arc_phase: None,
-    })
+    db.create_task(
+        CreateTaskParams {
+            project_id,
+            project_slug: "yojana".into(),
+            title: title.into(),
+            description: desc.into(),
+            category: Some("enhancement".into()),
+            status: None,
+            slice_type: Some("AFK".into()),
+            acceptance_criteria: serde_json::to_string(&ac).unwrap(),
+            decisions: "[]".into(),
+            context_refs: serde_json::to_string(&refs).unwrap(),
+            files: "[]".into(),
+            tags: "[]".into(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            arc_id: None,
+            arc_phase: None,
+        },
+        "test",
+    )
     .unwrap()
 }
 
@@ -50,6 +53,7 @@ fn bootstrap_v0_review() {
             "Yojana task graph server",
             "Local-first task graph for the manas ecosystem",
             None,
+            "test",
         )
         .unwrap();
     let pid = project.id;
@@ -130,6 +134,7 @@ fn bootstrap_v0_review() {
                 status: Some("ready-for-agent".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
         db.update_task(
@@ -138,6 +143,7 @@ fn bootstrap_v0_review() {
                 status: Some("in-progress".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
         db.update_task(
@@ -146,6 +152,7 @@ fn bootstrap_v0_review() {
                 status: Some("done".into()),
                 ..Default::default()
             },
+            "test",
         )
         .unwrap();
     }

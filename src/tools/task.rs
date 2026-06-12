@@ -300,7 +300,8 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 arc_id: arc_uuid,
                 arc_phase,
             };
-            let row = db.create_task(params)?;
+            let actor = args.author.as_deref().unwrap_or("agent");
+            let row = db.create_task(params, actor)?;
             Ok(slim_ack(&row))
         }
         TaskAction::Get => {
@@ -390,9 +391,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 arc_id: arc_id_update,
                 arc_phase: arc_phase_update,
             };
-            let row = db.update_task(id, updates)?;
+            let actor = args.author.as_deref().unwrap_or("agent");
+            let row = db.update_task(id, updates, actor)?;
             if had_status_change {
-                db.try_auto_advance_phase(&row.id)?;
+                db.try_auto_advance_phase(&row.id, actor)?;
             }
             Ok(slim_ack(&row))
         }
@@ -551,7 +553,8 @@ mod tests {
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         db
     }
 

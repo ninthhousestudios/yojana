@@ -135,7 +135,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 tags: to_json(&args.tags.unwrap_or_default())?,
                 context_refs: to_json(&args.context_refs.unwrap_or_default())?,
             };
-            let row = db.create_arc(params)?;
+            let row = db.create_arc(params, "agent")?;
             Ok(slim_ack(&row))
         }
         "get" => {
@@ -161,7 +161,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 tags: args.tags.map(|v| to_json(&v)).transpose()?,
                 context_refs: args.context_refs.map(|v| to_json(&v)).transpose()?,
             };
-            let row = db.update_arc(id, updates)?;
+            let row = db.update_arc(id, updates, "agent")?;
             Ok(slim_ack(&row))
         }
         "advance" => {
@@ -170,7 +170,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("id required for advance".into()))?;
             let skip = args.skip.unwrap_or(false);
-            let row = db.advance_arc_phase(id, args.phase.as_deref(), skip, args.note)?;
+            let row = db.advance_arc_phase(id, args.phase.as_deref(), skip, args.note, "agent")?;
             Ok(slim_ack(&row))
         }
         "revert" => {
@@ -182,7 +182,7 @@ pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> 
                 .phase
                 .as_deref()
                 .ok_or_else(|| YojanaError::InvalidInput("phase required for revert".into()))?;
-            let row = db.revert_arc_phase(id, phase, args.note)?;
+            let row = db.revert_arc_phase(id, phase, args.note, "agent")?;
             Ok(slim_ack(&row))
         }
         other => Err(YojanaError::InvalidInput(format!(
@@ -198,7 +198,8 @@ mod tests {
 
     fn test_db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.create_project("proj", "Project", "", None).unwrap();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
         db
     }
 
@@ -452,7 +453,7 @@ mod tests {
     #[test]
     fn task_create_rejects_cross_project_arc() {
         let db = test_db();
-        db.create_project("other", "Other Project", "", None)
+        db.create_project("other", "Other Project", "", None, "test")
             .unwrap();
         create_arc(&db); // arc in "proj"
 
@@ -490,7 +491,7 @@ mod tests {
     #[test]
     fn task_update_rejects_cross_project_arc() {
         let db = test_db();
-        db.create_project("other", "Other Project", "", None)
+        db.create_project("other", "Other Project", "", None, "test")
             .unwrap();
         create_arc(&db); // arc in "proj"
 
