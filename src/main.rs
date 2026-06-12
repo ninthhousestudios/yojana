@@ -63,9 +63,23 @@ enum Command {
     Done {
         /// Task identifier (UUID or slug/N)
         id: String,
+        /// Closing one-liner (mechanism for bugs, summary for features)
+        #[arg(short = 'm', long = "message")]
+        message: Option<String>,
         /// Commit SHA to record as a context_ref on the task
         #[arg(long)]
         commit: Option<String>,
+    },
+    /// Mark a task as wontfix with a structured reason.
+    Wontfix {
+        /// Task identifier (UUID or slug/N)
+        id: String,
+        /// Reason: superseded=slug/N, misfiled, descoped, obsolete
+        #[arg(long)]
+        reason: String,
+        /// Optional note appended to the closing comment
+        #[arg(short = 'm', long = "message")]
+        message: Option<String>,
     },
     /// Show dependency tree for a project
     Tree {
@@ -446,12 +460,23 @@ async fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Done { id, commit } => {
+        Command::Done {
+            id,
+            message,
+            commit,
+        } => {
             let config = Config::from_env();
             let db = Db::open(&config).context("opening database")?;
             let task = db
                 .get_task(&id)?
                 .ok_or_else(|| anyhow::anyhow!("task '{}' not found", id))?;
+
+            if message.is_none() && task.category.as_deref() == Some("bug") {
+                use std::io::IsTerminal;
+                if std::io::stdin().is_terminal() {
+                    eprintln!("hint: bug tasks benefit from a root-cause one-liner (-m \"...\")");
+                }
+            }
 
             let mut context_refs: Vec<serde_json::Value> =
                 serde_json::from_str(&task.context_refs).unwrap_or_default();
@@ -462,6 +487,7 @@ async fn main() -> anyhow::Result<()> {
                 false
             };
 
+            let old_status = task.status.clone();
             let updates = TaskUpdates {
                 status: Some("done".to_string()),
                 context_refs: if refs_changed {
@@ -472,12 +498,102 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             let updated = db.update_task(&id, updates, "josh")?;
+
+            if old_status != updated.status {
+                db.try_auto_advance_phase(&updated.id, "josh")?;
+            }
+
+            if let Some(ref msg) = message {
+                let comment = format!("[close:done] {}", msg);
+                db.append_conversation_message(&updated.id, &comment, Some("josh"))?;
+            }
+
             let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
             match commit {
                 Some(sha) => println!("{} → done (commit {})", human_id, sha),
                 None => println!("{} → done", human_id),
             }
             Ok(())
+        }
+        Command::Wontfix {
+            id,
+            reason,
+            message,
+        } => {
+            let config = Config::from_env();
+            let db = Db::open(&config).context("opening database")?;
+            let task = db
+                .get_task(&id)?
+                .ok_or_else(|| anyhow::anyhow!("task '{}' not found", id))?;
+
+            let parsed = parse_wontfix_reason(&reason)?;
+
+            let reason_tag = match &parsed {
+                WontfixReason::Superseded(_) => "superseded",
+                WontfixReason::Misfiled => "misfiled",
+                WontfixReason::Descoped => "descoped",
+                WontfixReason::Obsolete => "obsolete",
+            };
+            let body = match &parsed {
+                WontfixReason::Superseded(target) => match &message {
+                    Some(n) => format!("superseded by {} — {}", target, n),
+                    None => format!("superseded by {}", target),
+                },
+                _ => message.clone().unwrap_or_default(),
+            };
+            let comment = format!("[close:wontfix:{}] {}", reason_tag, body);
+
+            let old_status = task.status.clone();
+            let updates = TaskUpdates {
+                status: Some("wontfix".to_string()),
+                force_status: true,
+                ..Default::default()
+            };
+            let updated = db.update_task(&id, updates, "josh")?;
+
+            if old_status != updated.status {
+                db.try_auto_advance_phase(&updated.id, "josh")?;
+            }
+
+            db.append_conversation_message(&updated.id, comment.trim(), Some("josh"))?;
+
+            if let WontfixReason::Superseded(ref target_ident) = parsed {
+                let target_task = db.get_task(target_ident)?.ok_or_else(|| {
+                    anyhow::anyhow!("superseding task '{}' not found", target_ident)
+                })?;
+                db.create_edge(target_task.id, updated.id, "supersedes", message.as_deref())?;
+            }
+
+            let human_id = format!("{}/{}", updated.project_slug, updated.sequence_number);
+            println!("{} → wontfix ({})", human_id, reason_tag);
+            Ok(())
+        }
+    }
+}
+
+enum WontfixReason {
+    Superseded(String),
+    Misfiled,
+    Descoped,
+    Obsolete,
+}
+
+fn parse_wontfix_reason(reason: &str) -> anyhow::Result<WontfixReason> {
+    if let Some(target) = reason.strip_prefix("superseded=") {
+        anyhow::ensure!(
+            !target.is_empty(),
+            "superseded requires a task identifier: --reason superseded=slug/N"
+        );
+        Ok(WontfixReason::Superseded(target.to_string()))
+    } else {
+        match reason {
+            "misfiled" => Ok(WontfixReason::Misfiled),
+            "descoped" => Ok(WontfixReason::Descoped),
+            "obsolete" => Ok(WontfixReason::Obsolete),
+            _ => anyhow::bail!(
+                "unknown reason '{}'; valid: superseded=slug/N, misfiled, descoped, obsolete",
+                reason
+            ),
         }
     }
 }

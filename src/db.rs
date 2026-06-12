@@ -1062,9 +1062,9 @@ impl Db {
                     payload: serde_json::json!({"from": task.status, "to": new_status}),
                     actor: Some(actor.to_string()),
                 });
-                if new_status == "done" {
+                if TERMINAL_STATUSES.contains(&new_status.as_str()) {
                     new_completed_at = Some(now);
-                } else if task.status == "done" {
+                } else if TERMINAL_STATUSES.contains(&task.status.as_str()) {
                     new_completed_at = None;
                 }
             }

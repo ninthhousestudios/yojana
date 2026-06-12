@@ -165,3 +165,314 @@ fn todo_works_with_nested_project_slug() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+fn create_in_progress_task(db: &Db, project_slug: &str, title: &str) -> String {
+    let proj = db.get_project(None, Some(project_slug)).unwrap().unwrap();
+    let row = db
+        .create_task(
+            yojana::db::CreateTaskParams {
+                project_id: proj.id,
+                project_slug: proj.slug.clone(),
+                title: title.to_string(),
+                description: String::new(),
+                category: None,
+                status: Some("in-progress".to_string()),
+                slice_type: None,
+                acceptance_criteria: "[]".to_string(),
+                decisions: "[]".to_string(),
+                context_refs: "[]".to_string(),
+                files: "[]".to_string(),
+                tags: "[]".to_string(),
+                implementation_plan: None,
+                execution_record: None,
+                reproduction: None,
+                root_cause: None,
+                arc_id: None,
+                arc_phase: None,
+            },
+            "test",
+        )
+        .unwrap();
+    format!("{}/{}", row.project_slug, row.sequence_number)
+}
+
+#[test]
+fn done_with_message_writes_tagged_comment() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("dm", "DM", "", None, "test").unwrap();
+        create_in_progress_task(&db, "dm", "some feature")
+    };
+
+    let out = cli()
+        .args(["done", &human_id, "-m", "shipped the widget"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("→ done"), "stdout: {stdout}");
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "done");
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert_eq!(msgs.len(), 1);
+    let text = msgs[0]["text"].as_str().unwrap();
+    assert_eq!(text, "[close:done] shipped the widget");
+    assert_eq!(msgs[0]["author"].as_str().unwrap(), "josh");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn done_without_message_no_comment() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("dn", "DN", "", None, "test").unwrap();
+        create_in_progress_task(&db, "dn", "quiet close")
+    };
+
+    let out = cli()
+        .args(["done", &human_id])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "done");
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert!(msgs.is_empty());
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_misfiled() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wm", "WM", "", None, "test").unwrap();
+        create_in_progress_task(&db, "wm", "wrong task")
+    };
+
+    let out = cli()
+        .args(["wontfix", &human_id, "--reason", "misfiled"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("→ wontfix (misfiled)"), "stdout: {stdout}");
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "wontfix");
+    assert!(task.completed_at.is_some());
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0]["text"].as_str().unwrap(),
+        "[close:wontfix:misfiled]"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_descoped_with_note() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wd", "WD", "", None, "test").unwrap();
+        create_in_progress_task(&db, "wd", "deferred work")
+    };
+
+    let out = cli()
+        .args([
+            "wontfix",
+            &human_id,
+            "--reason",
+            "descoped",
+            "-m",
+            "punted to v2",
+        ])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "wontfix");
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert_eq!(
+        msgs[0]["text"].as_str().unwrap(),
+        "[close:wontfix:descoped] punted to v2"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_superseded_creates_edge() {
+    let db_path = unique_db();
+    let (old_id, new_id) = {
+        let db = seed(&db_path);
+        db.create_project("ws", "WS", "", None, "test").unwrap();
+        let old = create_in_progress_task(&db, "ws", "old approach");
+        let new_task = create_in_progress_task(&db, "ws", "new approach");
+        (old, new_task)
+    };
+
+    let out = cli()
+        .args([
+            "wontfix",
+            &old_id,
+            "--reason",
+            &format!("superseded={new_id}"),
+        ])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = seed(&db_path);
+    let old_task = db.get_task(&old_id).unwrap().unwrap();
+    assert_eq!(old_task.status, "wontfix");
+
+    let msgs = db.get_conversation_messages(&old_task.id).unwrap();
+    let text = msgs[0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("[close:wontfix:superseded] superseded by ws/2"),
+        "comment was: {text}"
+    );
+
+    let edges = db.list_edges_for_task(&old_task.id).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].edge_type, "supersedes");
+    let new_task = db.get_task(&new_id).unwrap().unwrap();
+    assert_eq!(edges[0].source_task_id, new_task.id);
+    assert_eq!(edges[0].target_task_id, old_task.id);
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_superseded_nonexistent_target() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wn", "WN", "", None, "test").unwrap();
+        create_in_progress_task(&db, "wn", "to close")
+    };
+
+    let out = cli()
+        .args(["wontfix", &human_id, "--reason", "superseded=wn/999"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("wn/999"), "stderr: {stderr}");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_invalid_reason() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wi", "WI", "", None, "test").unwrap();
+        create_in_progress_task(&db, "wi", "test task")
+    };
+
+    let out = cli()
+        .args(["wontfix", &human_id, "--reason", "banana"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown reason"), "stderr: {stderr}");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn wontfix_missing_reason() {
+    let out = cli().args(["wontfix", "any/1"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--reason"), "stderr: {stderr}");
+}
+
+#[test]
+fn wontfix_from_ready_for_agent_uses_force() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wf", "WF", "", None, "test").unwrap();
+        let proj = db.get_project(None, Some("wf")).unwrap().unwrap();
+        let row = db
+            .create_task(
+                yojana::db::CreateTaskParams {
+                    project_id: proj.id,
+                    project_slug: proj.slug.clone(),
+                    title: "agent task".to_string(),
+                    description: String::new(),
+                    category: None,
+                    status: Some("ready-for-agent".to_string()),
+                    slice_type: None,
+                    acceptance_criteria: "[]".to_string(),
+                    decisions: "[]".to_string(),
+                    context_refs: "[]".to_string(),
+                    files: "[]".to_string(),
+                    tags: "[]".to_string(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
+            .unwrap();
+        format!("{}/{}", row.project_slug, row.sequence_number)
+    };
+
+    let out = cli()
+        .args(["wontfix", &human_id, "--reason", "obsolete"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "wontfix");
+
+    let _ = std::fs::remove_file(&db_path);
+}
