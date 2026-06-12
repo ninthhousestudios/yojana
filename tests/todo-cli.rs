@@ -476,3 +476,145 @@ fn wontfix_from_ready_for_agent_uses_force() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+#[test]
+fn wontfix_superseded_bad_target_leaves_task_unchanged() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("wb", "WB", "", None, "test").unwrap();
+        create_in_progress_task(&db, "wb", "should stay open")
+    };
+
+    let out = cli()
+        .args(["wontfix", &human_id, "--reason", "superseded=wb/999"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(
+        task.status, "in-progress",
+        "task should not have been mutated"
+    );
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert!(msgs.is_empty(), "no comment should have been written");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn done_bug_task_no_message_non_tty_skips_prompt() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("db", "DB", "", None, "test").unwrap();
+        let proj = db.get_project(None, Some("db")).unwrap().unwrap();
+        let row = db
+            .create_task(
+                yojana::db::CreateTaskParams {
+                    project_id: proj.id,
+                    project_slug: proj.slug.clone(),
+                    title: "a bug".to_string(),
+                    description: String::new(),
+                    category: Some("bug".to_string()),
+                    status: Some("in-progress".to_string()),
+                    slice_type: None,
+                    acceptance_criteria: "[]".to_string(),
+                    decisions: "[]".to_string(),
+                    context_refs: "[]".to_string(),
+                    files: "[]".to_string(),
+                    tags: "[]".to_string(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
+            .unwrap();
+        format!("{}/{}", row.project_slug, row.sequence_number)
+    };
+
+    // Non-TTY (piped) without -m: prompt is skipped, no comment written
+    let out = cli()
+        .args(["done", &human_id])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "done");
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert!(
+        msgs.is_empty(),
+        "non-TTY bug close without -m should skip prompt"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn done_bug_task_with_message_writes_comment() {
+    let db_path = unique_db();
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("ds", "DS", "", None, "test").unwrap();
+        let proj = db.get_project(None, Some("ds")).unwrap().unwrap();
+        let row = db
+            .create_task(
+                yojana::db::CreateTaskParams {
+                    project_id: proj.id,
+                    project_slug: proj.slug.clone(),
+                    title: "another bug".to_string(),
+                    description: String::new(),
+                    category: Some("bug".to_string()),
+                    status: Some("in-progress".to_string()),
+                    slice_type: None,
+                    acceptance_criteria: "[]".to_string(),
+                    decisions: "[]".to_string(),
+                    context_refs: "[]".to_string(),
+                    files: "[]".to_string(),
+                    tags: "[]".to_string(),
+                    implementation_plan: None,
+                    execution_record: None,
+                    reproduction: None,
+                    root_cause: None,
+                    arc_id: None,
+                    arc_phase: None,
+                },
+                "test",
+            )
+            .unwrap();
+        format!("{}/{}", row.project_slug, row.sequence_number)
+    };
+
+    let out = cli()
+        .args(["done", &human_id, "-m", "null deref on empty list"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.status, "done");
+    let msgs = db.get_conversation_messages(&task.id).unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0]["text"].as_str().unwrap(),
+        "[close:done] null deref on empty list"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}

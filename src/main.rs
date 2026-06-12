@@ -471,12 +471,24 @@ async fn main() -> anyhow::Result<()> {
                 .get_task(&id)?
                 .ok_or_else(|| anyhow::anyhow!("task '{}' not found", id))?;
 
-            if message.is_none() && task.category.as_deref() == Some("bug") {
+            let message = if message.is_none() && task.category.as_deref() == Some("bug") {
                 use std::io::IsTerminal;
                 if std::io::stdin().is_terminal() {
-                    eprintln!("hint: bug tasks benefit from a root-cause one-liner (-m \"...\")");
+                    eprint!("root cause (enter to skip): ");
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                } else {
+                    None
                 }
-            }
+            } else {
+                message
+            };
 
             let mut context_refs: Vec<serde_json::Value> =
                 serde_json::from_str(&task.context_refs).unwrap_or_default();
@@ -528,6 +540,15 @@ async fn main() -> anyhow::Result<()> {
 
             let parsed = parse_wontfix_reason(&reason)?;
 
+            // Validate superseding task before any mutations
+            let superseding_task = if let WontfixReason::Superseded(ref target_ident) = parsed {
+                Some(db.get_task(target_ident)?.ok_or_else(|| {
+                    anyhow::anyhow!("superseding task '{}' not found", target_ident)
+                })?)
+            } else {
+                None
+            };
+
             let reason_tag = match &parsed {
                 WontfixReason::Superseded(_) => "superseded",
                 WontfixReason::Misfiled => "misfiled",
@@ -557,10 +578,7 @@ async fn main() -> anyhow::Result<()> {
 
             db.append_conversation_message(&updated.id, comment.trim(), Some("josh"))?;
 
-            if let WontfixReason::Superseded(ref target_ident) = parsed {
-                let target_task = db.get_task(target_ident)?.ok_or_else(|| {
-                    anyhow::anyhow!("superseding task '{}' not found", target_ident)
-                })?;
+            if let Some(ref target_task) = superseding_task {
                 db.create_edge(target_task.id, updated.id, "supersedes", message.as_deref())?;
             }
 
