@@ -371,7 +371,12 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             } else {
                 args.context_refs
             };
-            let had_status_change = args.status.is_some();
+            let has_status_request = args.status.is_some();
+            let old_status = if has_status_request {
+                db.get_task(id)?.map(|t| t.status)
+            } else {
+                None
+            };
             let updates = TaskUpdates {
                 title: args.title,
                 description: args.description,
@@ -393,8 +398,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             };
             let actor = args.author.as_deref().unwrap_or("agent");
             let row = db.update_task(id, updates, actor)?;
-            if had_status_change {
-                db.try_auto_advance_phase(&row.id, actor)?;
+            if let Some(old) = old_status {
+                if old != row.status {
+                    db.try_auto_advance_phase(&row.id, actor)?;
+                }
             }
             Ok(slim_ack(&row))
         }

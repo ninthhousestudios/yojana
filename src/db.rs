@@ -4109,7 +4109,9 @@ mod tests {
             auto_entry.is_some(),
             "should have phase_auto_advanced entry"
         );
-        let payload = &auto_entry.unwrap().payload;
+        let entry = auto_entry.unwrap();
+        assert_eq!(entry.actor, Some("test".into()));
+        let payload = &entry.payload;
         assert_eq!(payload["phase"], "design");
         assert_eq!(payload["to"], "completed");
     }
