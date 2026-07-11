@@ -366,10 +366,10 @@ fn parse_task_identifier(s: &str) -> Result<TaskIdentifier, YojanaError> {
     if let Ok(uuid) = Uuid::parse_str(s) {
         return Ok(TaskIdentifier::Uuid(uuid));
     }
-    if let Some((slug, num_str)) = s.rsplit_once('/') {
-        if let Ok(num) = num_str.parse::<i64>() {
-            return Ok(TaskIdentifier::SlugSeq(slug.to_string(), num));
-        }
+    if let Some((slug, num_str)) = s.rsplit_once('/')
+        && let Ok(num) = num_str.parse::<i64>()
+    {
+        return Ok(TaskIdentifier::SlugSeq(slug.to_string(), num));
     }
     Err(YojanaError::InvalidInput(format!(
         "invalid task identifier '{s}'; expected UUID or 'project-slug/N'"
@@ -445,12 +445,11 @@ fn parse_arc_identifier(s: &str) -> Result<ArcIdentifier, YojanaError> {
     if let Ok(uuid) = Uuid::parse_str(s) {
         return Ok(ArcIdentifier::Uuid(uuid));
     }
-    if let Some((slug, num_str)) = s.rsplit_once('/') {
-        if let Some(num_str) = num_str.strip_prefix('~') {
-            if let Ok(num) = num_str.parse::<i64>() {
-                return Ok(ArcIdentifier::SlugSeq(slug.to_string(), num));
-            }
-        }
+    if let Some((slug, num_str)) = s.rsplit_once('/')
+        && let Some(num_str) = num_str.strip_prefix('~')
+        && let Ok(num) = num_str.parse::<i64>()
+    {
+        return Ok(ArcIdentifier::SlugSeq(slug.to_string(), num));
     }
     Err(YojanaError::InvalidInput(format!(
         "invalid arc identifier '{s}'; expected UUID or 'project-slug/~N'"
@@ -491,28 +490,28 @@ fn validate_phases(phases: &[serde_json::Value]) -> Result<(), YojanaError> {
                 "duplicate phase name '{name}'"
             )));
         }
-        if let Some(st) = phase.get("slice_type").and_then(|s| s.as_str()) {
-            if !["AFK", "HITL"].contains(&st) {
-                return Err(YojanaError::InvalidInput(format!(
-                    "invalid phase slice_type '{st}'; valid: AFK, HITL"
-                )));
-            }
+        if let Some(st) = phase.get("slice_type").and_then(|s| s.as_str())
+            && !["AFK", "HITL"].contains(&st)
+        {
+            return Err(YojanaError::InvalidInput(format!(
+                "invalid phase slice_type '{st}'; valid: AFK, HITL"
+            )));
         }
-        if let Some(gate) = phase.get("gate").and_then(|g| g.as_str()) {
-            if !VALID_PHASE_GATES.contains(&gate) {
-                return Err(YojanaError::InvalidInput(format!(
-                    "invalid phase gate '{gate}'; valid: {}",
-                    VALID_PHASE_GATES.join(", ")
-                )));
-            }
+        if let Some(gate) = phase.get("gate").and_then(|g| g.as_str())
+            && !VALID_PHASE_GATES.contains(&gate)
+        {
+            return Err(YojanaError::InvalidInput(format!(
+                "invalid phase gate '{gate}'; valid: {}",
+                VALID_PHASE_GATES.join(", ")
+            )));
         }
-        if let Some(status) = phase.get("status").and_then(|s| s.as_str()) {
-            if !VALID_PHASE_STATUSES.contains(&status) {
-                return Err(YojanaError::InvalidInput(format!(
-                    "invalid phase status '{status}'; valid: {}",
-                    VALID_PHASE_STATUSES.join(", ")
-                )));
-            }
+        if let Some(status) = phase.get("status").and_then(|s| s.as_str())
+            && !VALID_PHASE_STATUSES.contains(&status)
+        {
+            return Err(YojanaError::InvalidInput(format!(
+                "invalid phase status '{status}'; valid: {}",
+                VALID_PHASE_STATUSES.join(", ")
+            )));
         }
     }
     Ok(())
@@ -649,13 +648,12 @@ impl Db {
             rusqlite::params![id.as_bytes().as_slice(), slug, title, description, parent_bytes, history, now],
         )
         .map_err(|e| {
-            if let rusqlite::Error::SqliteFailure(ref err, _) = e {
-                if err.extended_code == 2067 {
+            if let rusqlite::Error::SqliteFailure(ref err, _) = e
+                && err.extended_code == 2067 {
                     return YojanaError::Conflict(format!(
                         "project slug '{slug}' already exists"
                     ));
                 }
-            }
             YojanaError::Db(e)
         })?;
 
@@ -854,25 +852,25 @@ impl Db {
         let now = chrono::Utc::now().timestamp_millis();
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&project.history)?;
 
-        if let Some(ref new_title) = updates.title {
-            if new_title != &project.title {
-                history.push(HistoryEntry {
+        if let Some(ref new_title) = updates.title
+            && new_title != &project.title
+        {
+            history.push(HistoryEntry {
                     ts: now,
                     kind: "updated".into(),
                     payload: serde_json::json!({"field": "title", "from": project.title, "to": new_title}),
                     actor: Some(actor.to_string()),
                 });
-            }
         }
-        if let Some(ref new_desc) = updates.description {
-            if new_desc != &project.description {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "description"}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_desc) = updates.description
+            && new_desc != &project.description
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "description"}),
+                actor: Some(actor.to_string()),
+            });
         }
         if let Some(ref new_status) = updates.status {
             if !VALID_PROJECT_STATUSES.contains(&new_status.as_str()) {
@@ -1045,39 +1043,39 @@ impl Db {
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&task.history)?;
 
         let mut new_completed_at = task.completed_at;
-        if let Some(ref new_status) = updates.status {
-            if new_status != &task.status {
-                if updates.force_status {
-                    if !state::valid_status(new_status) {
-                        return Err(YojanaError::InvalidInput(format!(
-                            "unknown status '{new_status}'"
-                        )));
-                    }
-                } else {
-                    state::validate_transition(&task.status, new_status)?;
+        if let Some(ref new_status) = updates.status
+            && new_status != &task.status
+        {
+            if updates.force_status {
+                if !state::valid_status(new_status) {
+                    return Err(YojanaError::InvalidInput(format!(
+                        "unknown status '{new_status}'"
+                    )));
                 }
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "status_changed".into(),
-                    payload: serde_json::json!({"from": task.status, "to": new_status}),
-                    actor: Some(actor.to_string()),
-                });
-                if TERMINAL_STATUSES.contains(&new_status.as_str()) {
-                    new_completed_at = Some(now);
-                } else if TERMINAL_STATUSES.contains(&task.status.as_str()) {
-                    new_completed_at = None;
-                }
+            } else {
+                state::validate_transition(&task.status, new_status)?;
+            }
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "status_changed".into(),
+                payload: serde_json::json!({"from": task.status, "to": new_status}),
+                actor: Some(actor.to_string()),
+            });
+            if TERMINAL_STATUSES.contains(&new_status.as_str()) {
+                new_completed_at = Some(now);
+            } else if TERMINAL_STATUSES.contains(&task.status.as_str()) {
+                new_completed_at = None;
             }
         }
-        if let Some(ref new_title) = updates.title {
-            if new_title != &task.title {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "title", "from": task.title, "to": new_title}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_title) = updates.title
+            && new_title != &task.title
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "title", "from": task.title, "to": new_title}),
+                actor: Some(actor.to_string()),
+            });
         }
 
         let new_title = updates.title.as_deref().unwrap_or(&task.title);
@@ -1256,61 +1254,61 @@ impl Db {
         let now = chrono::Utc::now().timestamp_millis();
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
 
-        if let Some(ref new_title) = updates.title {
-            if new_title != &arc.title {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_title) = updates.title
+            && new_title != &arc.title
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "title", "from": arc.title, "to": new_title}),
+                actor: Some(actor.to_string()),
+            });
         }
-        if let Some(ref new_status) = updates.status {
-            if new_status != &arc.status {
-                if !VALID_ARC_STATUSES.contains(&new_status.as_str()) {
-                    return Err(YojanaError::InvalidInput(format!(
-                        "invalid arc status '{new_status}'; valid: {}",
-                        VALID_ARC_STATUSES.join(", ")
-                    )));
-                }
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "status_changed".into(),
-                    payload: serde_json::json!({"from": arc.status, "to": new_status}),
-                    actor: Some(actor.to_string()),
-                });
+        if let Some(ref new_status) = updates.status
+            && new_status != &arc.status
+        {
+            if !VALID_ARC_STATUSES.contains(&new_status.as_str()) {
+                return Err(YojanaError::InvalidInput(format!(
+                    "invalid arc status '{new_status}'; valid: {}",
+                    VALID_ARC_STATUSES.join(", ")
+                )));
             }
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "status_changed".into(),
+                payload: serde_json::json!({"from": arc.status, "to": new_status}),
+                actor: Some(actor.to_string()),
+            });
         }
-        if let Some(ref new_desc) = updates.description {
-            if new_desc != &arc.description {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "description"}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_desc) = updates.description
+            && new_desc != &arc.description
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "description"}),
+                actor: Some(actor.to_string()),
+            });
         }
-        if let Some(ref new_tags) = updates.tags {
-            if new_tags != &arc.tags {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "tags"}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_tags) = updates.tags
+            && new_tags != &arc.tags
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "tags"}),
+                actor: Some(actor.to_string()),
+            });
         }
-        if let Some(ref new_refs) = updates.context_refs {
-            if new_refs != &arc.context_refs {
-                history.push(HistoryEntry {
-                    ts: now,
-                    kind: "updated".into(),
-                    payload: serde_json::json!({"field": "context_refs"}),
-                    actor: Some(actor.to_string()),
-                });
-            }
+        if let Some(ref new_refs) = updates.context_refs
+            && new_refs != &arc.context_refs
+        {
+            history.push(HistoryEntry {
+                ts: now,
+                kind: "updated".into(),
+                payload: serde_json::json!({"field": "context_refs"}),
+                actor: Some(actor.to_string()),
+            });
         }
 
         let new_title = updates.title.as_deref().unwrap_or(&arc.title);

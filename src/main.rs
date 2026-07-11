@@ -421,18 +421,18 @@ async fn main() -> anyhow::Result<()> {
 
             let arcs = db.list_arcs_for_projects(&project_ids)?;
             let arc_display: Vec<ArcDisplayInfo> =
-                arcs.iter().map(|a| ArcDisplayInfo::from_row(a)).collect();
+                arcs.iter().map(ArcDisplayInfo::from_row).collect();
             let arc_id_set: std::collections::HashSet<uuid::Uuid> =
                 arcs.iter().map(|a| a.id).collect();
 
             let mut arc_tasks: HashMap<uuid::Uuid, Vec<&yojana::db::TaskRow>> = HashMap::new();
             let mut non_arc_ids: Vec<uuid::Uuid> = Vec::new();
             for t in &tasks {
-                if let Some(aid) = &t.arc_id {
-                    if arc_id_set.contains(aid) {
-                        arc_tasks.entry(*aid).or_default().push(t);
-                        continue;
-                    }
+                if let Some(aid) = &t.arc_id
+                    && arc_id_set.contains(aid)
+                {
+                    arc_tasks.entry(*aid).or_default().push(t);
+                    continue;
                 }
                 non_arc_ids.push(t.id);
             }

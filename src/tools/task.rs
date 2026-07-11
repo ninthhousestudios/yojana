@@ -398,10 +398,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             };
             let actor = args.author.as_deref().unwrap_or("agent");
             let row = db.update_task(id, updates, actor)?;
-            if let Some(old) = old_status {
-                if old != row.status {
-                    db.try_auto_advance_phase(&row.id, actor)?;
-                }
+            if let Some(old) = old_status
+                && old != row.status
+            {
+                db.try_auto_advance_phase(&row.id, actor)?;
             }
             Ok(slim_ack(&row))
         }
