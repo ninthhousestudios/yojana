@@ -27,3 +27,10 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+
+[lints.clippy]
+unwrap_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
