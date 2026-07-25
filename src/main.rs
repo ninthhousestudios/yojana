@@ -8,6 +8,7 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
 };
+use std::future::IntoFuture;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -21,6 +22,10 @@ use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
 
 const DONE_RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How long shutdown waits for in-flight connections after MCP sessions have
+/// been cancelled. Must stay well under systemd's TimeoutStopSec.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Parser)]
 #[command(name = "yojana", version)]
@@ -676,13 +681,46 @@ async fn serve_http() -> anyhow::Result<()> {
             "/health",
             get(|| async { axum::Json(serde_json::json!({"status": "ok"})) }),
         );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // Live MCP sessions hold long-lived SSE connections that never complete on
+    // their own, so graceful shutdown must cancel them BEFORE it starts waiting
+    // for in-flight connections — otherwise the await never returns and systemd
+    // sits in stop-sigterm until TimeoutStopSec.
+    let shutdown_started = CancellationToken::new();
+    let shutdown = {
+        let cancel = cancel.clone();
+        let started = shutdown_started.clone();
+        async move {
+            shutdown_signal().await;
+            tracing::info!("shutdown signal received; cancelling MCP sessions");
+            cancel.cancel();
+            started.cancel();
+        }
+    };
 
-    cancel.cancel();
+    let mut serve = std::pin::pin!(
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown)
+            .into_future()
+    );
+    let result = tokio::select! {
+        res = &mut serve => res.map_err(anyhow::Error::from),
+        _ = shutdown_started.cancelled() => {
+            // Backstop: a connection that ignores cancellation degrades to an
+            // abrupt-but-prompt exit instead of hanging the unit.
+            match tokio::time::timeout(SHUTDOWN_GRACE, &mut serve).await {
+                Ok(res) => res.map_err(anyhow::Error::from),
+                Err(_) => {
+                    tracing::warn!(
+                        "graceful shutdown still pending after {SHUTDOWN_GRACE:?}; exiting anyway"
+                    );
+                    Ok(())
+                }
+            }
+        }
+    };
+
     let _ = std::fs::remove_file(&pid_path);
-    Ok(())
+    result
 }
 
 fn is_stale_terminal(t: &yojana::db::TaskRow, cutoff: i64) -> bool {
