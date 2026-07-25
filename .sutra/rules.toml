@@ -25,13 +25,17 @@ name = "no-server-database"
 severity = "blocking"
 provenance = "docs/yojana-design.md § storage decision: SQLite, not Postgres"
 
-# NOTE: a `confined_external` for rusqlite (allowed_in = [src/db.rs, src/error.rs])
-# is the rule we actually want here — storage access should be a single layer.
-# It is omitted because sutra also treats the Cargo.toml manifest dependency as a
-# violation signal, and for a single-crate package the manifest can never be
-# inside `allowed_in`. That produces a permanent, unfixable blocking violation.
-# Filed against sutra; re-add once manifest entries are exempt for the package
-# that declares them.
+# Storage access is a single layer: rusqlite stays behind db.rs, with error.rs
+# translating its error type. Anything else reaching for the driver directly
+# means a query has escaped the storage boundary.
+
+[[constraint]]
+kind = "confined_external"
+crates = ["rusqlite"]
+allowed_in = ["src/db.rs", "src/error.rs"]
+name = "sqlite-behind-db-layer"
+severity = "blocking"
+provenance = "docs/yojana-design.md § storage decision: SQLite, not Postgres"
 
 # ═══════════════════════════════════════════════════════════════════
 # Server purity
