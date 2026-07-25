@@ -4,6 +4,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::db::{EdgeRow, HistoryEntry, TaskRow};
+use crate::tools::acceptance;
 use crate::tools::context_ref::{ContextRef, RefType};
 
 pub const VALID_SHAPES: &[&str] = &["summary", "working", "planning", "agent", "review"];
@@ -114,7 +115,7 @@ pub fn working(
     WorkingBundle {
         shape: "working",
         human_id: human_id(task),
-        acceptance_criteria: json_array(&task.acceptance_criteria),
+        acceptance_criteria: acceptance::parse_stored_values(&task.acceptance_criteria),
         decisions: json_array(&task.decisions),
         neighbors: neighbor_summaries,
         recent_messages: recent,
@@ -182,7 +183,7 @@ pub fn planning(
     PlanningBundle {
         shape: "planning",
         human_id: human_id(task),
-        acceptance_criteria: json_array(&task.acceptance_criteria),
+        acceptance_criteria: acceptance::parse_stored_values(&task.acceptance_criteria),
         decisions: json_array(&task.decisions),
         neighbors: neighbor_summaries,
         recent_messages: recent,
@@ -217,7 +218,7 @@ pub fn agent(
     AgentBundle {
         shape: "agent",
         human_id: human_id(task),
-        acceptance_criteria: json_array(&task.acceptance_criteria),
+        acceptance_criteria: acceptance::parse_stored_values(&task.acceptance_criteria),
         decisions: json_array(&task.decisions),
         implementation_plan: task.implementation_plan.clone(),
         arc_info,
@@ -267,7 +268,7 @@ pub fn review(task: &TaskRow, neighbors_with_edges: &[(TaskRow, Vec<EdgeRow>)]) 
         title: task.title.clone(),
         status: task.status.clone(),
         description: task.description.clone(),
-        acceptance_criteria: json_array(&task.acceptance_criteria),
+        acceptance_criteria: acceptance::parse_stored_values(&task.acceptance_criteria),
         decisions: json_array(&task.decisions),
         implementation_plan: task.implementation_plan.clone(),
         git_refs,
@@ -454,6 +455,40 @@ mod tests {
         let bundle = summary(&task, &[]);
         assert!(bundle.edge_counts.is_empty());
         assert!(bundle.last_history.is_none());
+    }
+
+    /// A criteria column we cannot parse must be distinguishable from an empty
+    /// one on every bundle shape — an agent reads these instead of the CLI.
+    #[test]
+    fn unreadable_criteria_never_look_empty_on_any_shape() {
+        // A top-level non-array is the shape that used to vanish entirely:
+        // json_array's unwrap_or_default turned it into an empty list.
+        let mut task = make_task(1, "proj", 1);
+        task.acceptance_criteria = r#"{"text":"not an array"}"#.into();
+
+        let mut empty = make_task(2, "proj", 2);
+        empty.acceptance_criteria = "[]".into();
+
+        let marker = |criteria: &[serde_json::Value]| {
+            assert_eq!(criteria.len(), 1, "expected a marker element");
+            assert!(
+                criteria[0].get(acceptance::UNREADABLE_KEY).is_some(),
+                "expected the unreadable marker, got {:?}",
+                criteria[0]
+            );
+        };
+
+        marker(&working(&task, &[], &[], 10, None).acceptance_criteria);
+        marker(&planning(&task, &[], &[], 10, None, &[]).acceptance_criteria);
+        marker(&agent(&task, None, &[]).acceptance_criteria);
+        marker(&review(&task, &[]).acceptance_criteria);
+
+        assert!(
+            working(&empty, &[], &[], 10, None)
+                .acceptance_criteria
+                .is_empty(),
+            "a genuinely empty column stays empty"
+        );
     }
 
     #[test]

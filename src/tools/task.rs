@@ -184,7 +184,7 @@ impl From<TaskRow> for TaskOutput {
             category: row.category,
             status: row.status,
             slice_type: row.slice_type,
-            acceptance_criteria: json_array(&row.acceptance_criteria),
+            acceptance_criteria: acceptance::parse_stored_values(&row.acceptance_criteria),
             decisions: json_array(&row.decisions),
             implementation_plan: row.implementation_plan,
             execution_record: row.execution_record,
@@ -571,6 +571,65 @@ mod tests {
         db.create_project("proj", "Project", "", None, "test")
             .unwrap();
         db
+    }
+
+    /// `action=get` is what agents read. A criteria value we cannot parse has to
+    /// come back visibly broken, not as an empty list.
+    #[test]
+    fn get_marks_unreadable_criteria_instead_of_returning_empty() {
+        let db = test_db();
+        let created = handle(
+            &db,
+            TaskArgs {
+                project: Some("proj".into()),
+                title: Some("Task".into()),
+                ..plain_blank(TaskAction::Create)
+            },
+        )
+        .unwrap();
+        let id = created["human_id"].as_str().unwrap().to_string();
+
+        let empty = handle(
+            &db,
+            TaskArgs {
+                id: Some(id.clone()),
+                ..plain_blank(TaskAction::Get)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            empty["acceptance_criteria"].as_array().unwrap().len(),
+            0,
+            "a task with no criteria reads as an empty list"
+        );
+
+        // Write the malformed value straight through the db layer, the way a
+        // pre-normalization row or a direct SQL write would have landed.
+        db.update_task(
+            &id,
+            TaskUpdates {
+                acceptance_criteria: Some(r#"{"text":"not an array"}"#.into()),
+                ..Default::default()
+            },
+            "test",
+        )
+        .unwrap();
+
+        let out = handle(
+            &db,
+            TaskArgs {
+                id: Some(id),
+                ..plain_blank(TaskAction::Get)
+            },
+        )
+        .unwrap();
+        let criteria = out["acceptance_criteria"].as_array().unwrap();
+        assert_eq!(criteria.len(), 1);
+        assert!(
+            criteria[0].get(acceptance::UNREADABLE_KEY).is_some(),
+            "unreadable criteria must not read as absent, got {:?}",
+            criteria[0]
+        );
     }
 
     fn create_arc(db: &Db) -> serde_json::Value {

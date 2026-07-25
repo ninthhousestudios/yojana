@@ -51,6 +51,32 @@ pub fn parse_stored(json: &str) -> Result<Vec<AcceptanceCriterion>, serde_json::
     Ok(items.into_iter().map(Into::into).collect())
 }
 
+/// Key carrying the parse error on the marker element emitted by
+/// [`parse_stored_values`]. Part of the MCP output contract.
+pub const UNREADABLE_KEY: &str = "_unreadable";
+
+/// Parse a stored `acceptance_criteria` column into JSON output values.
+///
+/// This is the JSON-surface counterpart to [`parse_stored`], for the MCP
+/// outputs that hand criteria back as raw values. On failure it yields a
+/// one-element array holding a marker object rather than an empty array:
+/// an agent reading a task must never see a malformed spec as no spec.
+pub fn parse_stored_values(json: &str) -> Vec<serde_json::Value> {
+    match parse_stored(json) {
+        Ok(criteria) => criteria
+            .into_iter()
+            .map(|c| serde_json::json!({"text": c.text, "done": c.done}))
+            .collect(),
+        Err(e) => {
+            tracing::warn!("unreadable acceptance_criteria: {e}");
+            vec![serde_json::json!({
+                UNREADABLE_KEY: e.to_string(),
+                "raw": json,
+            })]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
