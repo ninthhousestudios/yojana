@@ -536,6 +536,17 @@ fn apply_phase_defaults(phases: &[serde_json::Value]) -> Vec<serde_json::Value> 
         .collect()
 }
 
+/// Set a key on a JSON object in place.
+///
+/// Every caller passes a value built by `json!({...})` or a phase that
+/// `apply_phase_defaults` already proved to be an object.
+fn set_field(value: &mut serde_json::Value, key: &str, field: serde_json::Value) {
+    value
+        .as_object_mut()
+        .expect("invariant: caller passes a JSON object")
+        .insert(key.to_string(), field);
+}
+
 use rusqlite::OptionalExtension;
 
 impl Db {
@@ -1364,39 +1375,50 @@ impl Db {
                 .ok_or_else(|| YojanaError::InvalidInput("no active phase to advance".into()))?
         };
 
-        let target_status = phases[target_idx]
+        let (target, following) = phases
+            .split_at_mut(target_idx)
+            .1
+            .split_first_mut()
+            .expect("invariant: target_idx came from phases.iter().position()");
+
+        let target_status = target
             .get("status")
             .and_then(|s| s.as_str())
             .unwrap_or("pending");
         if target_status != "active" {
             return Err(YojanaError::InvalidInput(format!(
                 "cannot advance phase '{}': status is '{}', expected 'active'",
-                phases[target_idx]["name"].as_str().unwrap_or("?"),
+                target.get("name").and_then(|n| n.as_str()).unwrap_or("?"),
                 target_status
             )));
         }
 
-        let new_status = if skip { "skipped" } else { "completed" };
-        phases[target_idx]["status"] = serde_json::Value::String(new_status.into());
+        let phase_name_str = target
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("?")
+            .to_string();
 
-        if let Some(next) = phases[target_idx + 1..]
+        let new_status = if skip { "skipped" } else { "completed" };
+        set_field(
+            target,
+            "status",
+            serde_json::Value::String(new_status.into()),
+        );
+
+        if let Some(next) = following
             .iter_mut()
             .find(|p| p.get("status").and_then(|s| s.as_str()) == Some("pending"))
         {
-            next["status"] = serde_json::Value::String("active".into());
+            set_field(next, "status", serde_json::Value::String("active".into()));
         }
-
-        let phase_name_str = phases[target_idx]["name"]
-            .as_str()
-            .unwrap_or("?")
-            .to_string();
         let mut payload = serde_json::json!({
             "phase": phase_name_str,
             "from": "active",
             "to": new_status,
         });
         if let Some(ref n) = note {
-            payload["note"] = serde_json::Value::String(n.clone());
+            set_field(&mut payload, "note", serde_json::Value::String(n.clone()));
         }
         history.push(HistoryEntry {
             ts: now,
@@ -1441,7 +1463,11 @@ impl Db {
             .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(phase_name))
             .ok_or_else(|| YojanaError::InvalidInput(format!("unknown phase '{phase_name}'")))?;
 
-        let current_status = phases[idx]
+        let phase = phases
+            .get_mut(idx)
+            .expect("invariant: idx came from phases.iter().position()");
+
+        let current_status = phase
             .get("status")
             .and_then(|s| s.as_str())
             .unwrap_or("pending");
@@ -1451,7 +1477,7 @@ impl Db {
             )));
         }
 
-        phases[idx]["status"] = serde_json::Value::String("active".into());
+        set_field(phase, "status", serde_json::Value::String("active".into()));
 
         let mut payload = serde_json::json!({
             "phase": phase_name,
@@ -1459,7 +1485,7 @@ impl Db {
             "to": "active",
         });
         if let Some(ref n) = note {
-            payload["note"] = serde_json::Value::String(n.clone());
+            set_field(&mut payload, "note", serde_json::Value::String(n.clone()));
         }
         history.push(HistoryEntry {
             ts: now,
@@ -1505,23 +1531,20 @@ impl Db {
         }
 
         let phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
-        let phase_idx = match phases
+        let Some((phase_idx, phase)) = phases
             .iter()
-            .position(|p| p.get("name").and_then(|n| n.as_str()) == Some(&arc_phase))
-        {
-            Some(i) => i,
-            None => return Ok(false),
+            .enumerate()
+            .find(|(_, p)| p.get("name").and_then(|n| n.as_str()) == Some(&arc_phase))
+        else {
+            return Ok(false);
         };
 
-        let gate = phases[phase_idx]
-            .get("gate")
-            .and_then(|g| g.as_str())
-            .unwrap_or("auto");
+        let gate = phase.get("gate").and_then(|g| g.as_str()).unwrap_or("auto");
         if gate != "auto" {
             return Ok(false);
         }
 
-        let phase_status = phases[phase_idx]
+        let phase_status = phase
             .get("status")
             .and_then(|s| s.as_str())
             .unwrap_or("pending");
@@ -1560,13 +1583,22 @@ impl Db {
         let mut phases: Vec<serde_json::Value> = serde_json::from_str(&arc.phases)?;
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&arc.history)?;
 
-        phases[phase_idx]["status"] = serde_json::Value::String("completed".into());
+        let (current, following) =
+            phases.split_at_mut(phase_idx).1.split_first_mut().expect(
+                "invariant: phase_idx came from an enumerate().find() over the same phases",
+            );
 
-        if let Some(next) = phases[phase_idx + 1..]
+        set_field(
+            current,
+            "status",
+            serde_json::Value::String("completed".into()),
+        );
+
+        if let Some(next) = following
             .iter_mut()
             .find(|p| p.get("status").and_then(|s| s.as_str()) == Some("pending"))
         {
-            next["status"] = serde_json::Value::String("active".into());
+            set_field(next, "status", serde_json::Value::String("active".into()));
         }
 
         history.push(HistoryEntry {
@@ -1602,8 +1634,8 @@ impl Db {
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
         if let Some(ref project_ids) = filter.project_ids {
-            if project_ids.len() == 1 {
-                params.push(Box::new(project_ids[0].as_bytes().to_vec()));
+            if let [only] = project_ids.as_slice() {
+                params.push(Box::new(only.as_bytes().to_vec()));
                 conditions.push(format!("t.project_id = ?{}", params.len()));
             } else if !project_ids.is_empty() {
                 let placeholders: Vec<String> = project_ids

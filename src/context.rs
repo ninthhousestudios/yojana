@@ -106,11 +106,11 @@ pub fn working(
         .map(|(t, e)| summary(t, e))
         .collect();
 
-    let recent: Vec<serde_json::Value> = if messages.len() > max_messages {
-        messages[messages.len() - max_messages..].to_vec()
-    } else {
-        messages.to_vec()
-    };
+    let recent: Vec<serde_json::Value> = messages
+        .iter()
+        .skip(messages.len().saturating_sub(max_messages))
+        .cloned()
+        .collect();
 
     WorkingBundle {
         shape: "working",
@@ -172,11 +172,11 @@ pub fn planning(
         .map(|(t, e)| summary(t, e))
         .collect();
 
-    let recent: Vec<serde_json::Value> = if messages.len() > max_messages {
-        messages[messages.len() - max_messages..].to_vec()
-    } else {
-        messages.to_vec()
-    };
+    let recent: Vec<serde_json::Value> = messages
+        .iter()
+        .skip(messages.len().saturating_sub(max_messages))
+        .cloned()
+        .collect();
 
     let (prior_decisions, prior_records) = extract_prior_phase_context(prior_phase_tasks);
 
