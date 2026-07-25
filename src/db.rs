@@ -607,6 +607,10 @@ impl Db {
                 "0012_normalize_acceptance_criteria",
                 include_str!("../migrations/0012_normalize-acceptance-criteria.sql"),
             ),
+            (
+                "0013_canonical_acceptance_criteria",
+                include_str!("../migrations/0013_canonical-acceptance-criteria.sql"),
+            ),
         ];
 
         let conn = self.conn.lock();
@@ -3218,6 +3222,160 @@ mod tests {
             mixed.acceptance_criteria,
             r#"[{"text":"loose","done":false},{"text":"typed","done":true}]"#,
             "a mixed array should normalize the strings and keep the objects"
+        );
+    }
+
+    /// 0013 has to cope with every shape the old untyped `items: true` schema
+    /// let through, including the ones 0012 never selected.
+    #[test]
+    fn acceptance_criteria_0013_canonicalizes_every_shape() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
+
+        // (seed value, expected value after 0013, quarantined?)
+        let cases: Vec<(&str, &str, bool)> = vec![
+            (r#"["str"]"#, r#"[{"text":"str","done":false}]"#, false),
+            (
+                r#"[{"text":"a","done":true}]"#,
+                r#"[{"text":"a","done":true}]"#,
+                false,
+            ),
+            (r#"[{"text":"b"}]"#, r#"[{"text":"b","done":false}]"#, false),
+            ("[]", "[]", false),
+            (
+                r#"["keep",{"text":"order","done":false},"third"]"#,
+                r#"[{"text":"keep","done":false},{"text":"order","done":false},{"text":"third","done":false}]"#,
+                false,
+            ),
+            (
+                r#"[true,7,null,["nested"],{"note":"no text"}]"#,
+                r#"[{"text":"<unmigratable true: 1>","done":false},{"text":"<unmigratable integer: 7>","done":false},{"text":"<unmigratable null: null>","done":false},{"text":"<unmigratable array: [\"nested\"]>","done":false},{"text":"<unmigratable object: {\"note\":\"no text\"}>","done":false}]"#,
+                true,
+            ),
+            (
+                r#"{"text":"not an array"}"#,
+                r#"[{"text":"<unmigratable column: {\"text\":\"not an array\"}>","done":false}]"#,
+                true,
+            ),
+            (
+                "not json at all",
+                r#"[{"text":"<unmigratable column: not json at all>","done":false}]"#,
+                true,
+            ),
+        ];
+
+        let seeded: Vec<Uuid> = cases
+            .iter()
+            .enumerate()
+            .map(|(i, (seed, _, _))| {
+                let task = create_test_task(&db, "proj", &format!("Task {i}"));
+                let conn = db.conn.lock();
+                conn.execute(
+                    "UPDATE tasks SET acceptance_criteria = ?1 WHERE id = ?2",
+                    rusqlite::params![seed, task.id.as_bytes().as_slice()],
+                )
+                .unwrap();
+                task.id
+            })
+            .collect();
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "DELETE FROM _yojana_migrations WHERE name = '0013_canonical_acceptance_criteria'",
+                [],
+            )
+            .unwrap();
+            conn.execute("DELETE FROM acceptance_criteria_quarantine", [])
+                .unwrap();
+        }
+        db.run_migrations().unwrap();
+
+        for (id, (seed, expected, quarantined)) in seeded.iter().zip(cases.iter()) {
+            let row = db.get_task(&id.to_string()).unwrap().unwrap();
+            assert_eq!(
+                row.acceptance_criteria, *expected,
+                "seed {seed} did not canonicalize as expected"
+            );
+
+            let conn = db.conn.lock();
+            let count: i64 = conn
+                .prepare("SELECT COUNT(*) FROM acceptance_criteria_quarantine WHERE task_id = ?1")
+                .unwrap()
+                .query_row(rusqlite::params![id.as_bytes().as_slice()], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                count,
+                i64::from(*quarantined),
+                "seed {seed}: unexpected quarantine state"
+            );
+        }
+
+        // Every element is now an object with a string text and a boolean done.
+        let conn = db.conn.lock();
+        let non_canonical: i64 = conn
+            .prepare(
+                "SELECT COUNT(*) FROM tasks t, json_each(t.acceptance_criteria) je \
+                 WHERE je.type <> 'object' \
+                    OR json_type(je.value, '$.text') <> 'text' \
+                    OR json_type(je.value, '$.done') NOT IN ('true','false')",
+            )
+            .unwrap()
+            .query_row([], |r| r.get(0))
+            .unwrap();
+        assert_eq!(non_canonical, 0, "criteria left in a non-canonical shape");
+    }
+
+    /// Re-applying 0013 must change nothing — including not re-quarantining.
+    #[test]
+    fn acceptance_criteria_0013_is_idempotent() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
+        let task = create_test_task(&db, "proj", "Task");
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "UPDATE tasks SET acceptance_criteria = ?1 WHERE id = ?2",
+                rusqlite::params![r#"["a",{"text":"b"},7]"#, task.id.as_bytes().as_slice()],
+            )
+            .unwrap();
+            conn.execute(
+                "DELETE FROM _yojana_migrations WHERE name = '0013_canonical_acceptance_criteria'",
+                [],
+            )
+            .unwrap();
+        }
+        db.run_migrations().unwrap();
+        let first = db.get_task(&task.id.to_string()).unwrap().unwrap();
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "DELETE FROM _yojana_migrations WHERE name = '0013_canonical_acceptance_criteria'",
+                [],
+            )
+            .unwrap();
+        }
+        db.run_migrations().unwrap();
+        let second = db.get_task(&task.id.to_string()).unwrap().unwrap();
+
+        assert_eq!(
+            first.acceptance_criteria, second.acceptance_criteria,
+            "second application changed the data"
+        );
+
+        let conn = db.conn.lock();
+        let quarantined: i64 = conn
+            .prepare("SELECT COUNT(*) FROM acceptance_criteria_quarantine")
+            .unwrap()
+            .query_row([], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            quarantined, 1,
+            "re-run should not duplicate quarantine rows"
         );
     }
 
