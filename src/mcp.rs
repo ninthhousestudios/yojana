@@ -19,7 +19,6 @@ use crate::tools::task::TaskArgs;
 
 pub struct YojanaServer {
     db: Arc<Db>,
-    #[allow(dead_code)]
     config: Arc<Config>,
     tool_router: ToolRouter<Self>,
 }

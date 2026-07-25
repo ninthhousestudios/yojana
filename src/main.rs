@@ -670,7 +670,6 @@ async fn serve_http() -> anyhow::Result<()> {
         shttp_config,
     );
 
-    #[allow(deprecated)]
     let app = axum::Router::new()
         .route("/mcp", any_service(mcp_service))
         .route(
@@ -735,8 +734,8 @@ fn resolve_edges_for_display(
 
 async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
-    let mut term =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("invariant: SIGTERM is always catchable; registration fails only on fd exhaustion");
     tokio::select! {
         _ = ctrl_c => {},
         _ = term.recv() => {},

@@ -1,0 +1,203 @@
+# .sutra/rules.toml — Architectural constraints for yojana
+#
+# Severity levels:
+#   blocking      — guard denies edits that introduce these
+#   advisory      — warning in review, agent proceeds
+#   informational — tracked in review output, silent otherwise
+#
+# Provenance sources:
+#   docs/yojana-design.md — the design doc (storage, purity, tool surface)
+#   CLAUDE.md             — agent skill routing
+#   Cargo.toml            — [lints.clippy] baseline
+
+# ═══════════════════════════════════════════════════════════════════
+# Storage discipline
+# ═══════════════════════════════════════════════════════════════════
+# The design doc is explicit: SQLite, local-first, one DB per yojana root.
+# Postgres was considered and rejected (only chitta needs it, for pgvector).
+# Introducing a server database would change the deployment story for every
+# manas consumer.
+
+[[constraint]]
+kind = "forbidden_external"
+crates = ["postgres", "tokio-postgres", "sqlx", "diesel", "sea-orm", "deadpool-postgres"]
+name = "no-server-database"
+severity = "blocking"
+provenance = "docs/yojana-design.md § storage decision: SQLite, not Postgres"
+
+# NOTE: a `confined_external` for rusqlite (allowed_in = [src/db.rs, src/error.rs])
+# is the rule we actually want here — storage access should be a single layer.
+# It is omitted because sutra also treats the Cargo.toml manifest dependency as a
+# violation signal, and for a single-crate package the manifest can never be
+# inside `allowed_in`. That produces a permanent, unfixable blocking violation.
+# Filed against sutra; re-add once manifest entries are exempt for the package
+# that declares them.
+
+# ═══════════════════════════════════════════════════════════════════
+# Server purity
+# ═══════════════════════════════════════════════════════════════════
+# "Yojana validates the shape but does not resolve refs. Resolution happens
+# in manas-cli (per principle 9 — every cross-tier compound op lives in
+# manas-cli, never inside a subsystem server). Yojana's binary stays a pure
+# task-graph server."
+#
+# There are no sibling-crate deps today; this is a tripwire, not a fix.
+
+[[constraint]]
+kind = "forbidden_external"
+crates = ["chitta*", "sutra*", "smriti*", "sangha*", "kosha*"]
+name = "no-cross-tier-clients"
+severity = "blocking"
+provenance = "docs/yojana-design.md § context_refs — resolution lives in manas-cli"
+
+# ═══════════════════════════════════════════════════════════════════
+# Layering
+# ═══════════════════════════════════════════════════════════════════
+# Observed layers (from the import graph):
+#   infra   error.rs, config.rs, state.rs
+#   data    db.rs
+#   domain  graph.rs, context.rs
+#   tools   src/tools/*, mcp.rs
+#   entry   main.rs, display.rs
+#
+# The one upward edge today is context.rs → tools/context_ref.rs: the domain
+# context builder reaching into the MCP tool layer for the ContextRef shape.
+# ContextRef is really a domain type living in the wrong module. Advisory
+# until it moves.
+
+[[constraint]]
+kind = "forbidden_dep"
+from = "src/context.rs"
+to = "src/tools/**"
+name = "domain-must-not-import-tools"
+severity = "advisory"
+provenance = "import-graph analysis — ContextRef is misplaced in the tool layer"
+
+[[constraint]]
+kind = "max_fan_in"
+target = "src/tools/task.rs"
+threshold = 10
+name = "task-tool-fan-in"
+severity = "advisory"
+
+# ═══════════════════════════════════════════════════════════════════
+# Pattern discipline — vidhi/language-rules/rust.toml
+# ═══════════════════════════════════════════════════════════════════
+# Full catalog adopted. Guard uses introduced-only semantics: pre-existing
+# matches are grandfathered, so these fire on new code, not on history.
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(call_expression function: (field_expression field: (field_identifier) @m (#eq? @m "clone"))) @match'
+scope = "src/"
+name = "no-clone-driven-dev"
+severity = "advisory"
+provenance = "vidhi/language-rules/rust.toml — No Clone-Driven Development"
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(call_expression function: (field_expression field: (field_identifier) @m (#eq? @m "to_owned"))) @match'
+scope = "src/"
+name = "no-to-owned-bypass"
+severity = "advisory"
+provenance = "vidhi/language-rules/rust.toml — No Clone-Driven Development"
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '''
+(attribute_item (attribute (identifier) @m (#eq? @m "allow"))) @match
+(inner_attribute_item (attribute (identifier) @m (#eq? @m "allow"))) @match
+'''
+scope = "src/"
+name = "no-allow-attributes"
+severity = "blocking"
+provenance = "vidhi/language-rules/rust.toml — Lint layer tamper-resistance"
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(unsafe_block) @match'
+scope = "src/"
+name = "unsafe-requires-waiver"
+severity = "advisory"
+provenance = "vidhi/language-rules/rust.toml — Unsafe blocks carry an audited safety argument"
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(macro_invocation macro: (identifier) @m (#match? @m "^(todo|unimplemented)$")) @match'
+scope = "src/"
+name = "no-todo-unimplemented"
+severity = "advisory"
+provenance = "vidhi/language-rules/rust.toml — No stubbed control flow in committed code"
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(call_expression function: (field_expression field: (field_identifier) @m (#eq? @m "unwrap"))) @match'
+scope = "src/"
+name = "no-unwrap"
+severity = "advisory"
+provenance = "vidhi/language-rules/rust.toml — Panics carry invariant messages"
+
+# ═══════════════════════════════════════════════════════════════════
+# Conventions
+# ═══════════════════════════════════════════════════════════════════
+# Suppress tautologies (component-scoped "symbols in src are in src"),
+# structural truths (has_sig ↔ naming:snake_case is a Rust grammar fact),
+# and test-shape restatements.
+
+[conventions]
+suppress = [
+  "9ff1144c23a64e5c",  # has_sig → naming:snake_case (Rust grammar fact)
+  "eea9e813325c9942",  # naming:snake_case → has_sig (inverse of the same)
+  "4b38950d8caf48d6",  # kind:function → has_sig (tautology)
+  "f870156488df8a05",  # kind:function → naming:snake_case (grammar)
+  "6db913a6387a0fcc",  # returns_result → has_sig (tautology)
+  "9062212cac5564c3",  # returns_result → naming:snake_case (grammar)
+  "b7fe5b1f557b9113",  # complexity:low → has_sig (tautology)
+  "640bfb8b0ebd2df3",  # complexity:low → naming:snake_case (grammar)
+  "5c66a234738a0c49",  # complexity:zero → has_sig (tautology)
+  "33d440bbe2cf2bb0",  # complexity:zero → naming:snake_case (grammar)
+  "01ae410bc78febb6",  # kind:method → has_sig (tautology)
+  "65f0733e123935e8",  # kind:method → naming:snake_case (grammar)
+  "ef884bceff6967dc",  # kind:method → is_method (identity)
+  "c3f0a253ee831ff5",  # is_method → kind:method (identity)
+  "64f83603aa00ef95",  # is_method → has_sig (tautology)
+  "e4fd01544179183d",  # is_method → naming:snake_case (grammar)
+  "9a4e4095ed6a57ed",  # takes_self_ref → kind:method (definitional)
+  "1ee809e685b5e0a2",  # takes_self_ref → has_sig (tautology)
+  "57ef8dd259880263",  # takes_self_ref → naming:snake_case (grammar)
+  "dfe88f4a618b660e",  # takes_self_ref → is_method (definitional)
+  "89980cbf81956148",  # takes_self_ref → in:src (component tautology)
+  "b904b9f2422b6358",  # complexity:med → has_sig (tautology)
+  "8148cf0e7cd103e9",  # complexity:med → naming:snake_case (grammar)
+  "0760c7cf005d5fe9",  # complexity:high → has_sig (tautology)
+  "8e25fd23c6448e86",  # complexity:high → naming:snake_case (grammar)
+  "107ed8bf6e3e3e75",  # effect:mut_state → has_sig (tautology)
+  "f8e546e2cc3e9248",  # effect:mut_state → naming:snake_case (grammar)
+  "76f34fa871144429",  # in:tests → has_sig (tautology)
+  "9bf4383d3e5ac1e5",  # in:tests → naming:snake_case (grammar)
+  "76168c42c3aeabf2",  # in:tests → kind:function (structural truth)
+  "cc3b8de835e542f2",  # in:tests → complexity:zero (test shape, not intent)
+  "07bd5396dd1570f9",  # returns_self → has_sig (tautology)
+  "c93319bc0322b15a",  # returns_self → naming:snake_case (grammar)
+  "be5c897c749440ce",  # returns_self → is_method (definitional)
+  "5693978c3ee2d970",  # kind:method → in:src (component tautology)
+  "93458ef9be21e3be",  # is_method → in:src (component tautology)
+  "e2b62e858b222a80",  # vis:pub → in:src/tools (component tautology)
+  "4572d07644227e61",  # kind:function → in:src/tools (component tautology)
+  "4dac065c77e96928",  # complexity:low → in:src (component tautology)
+  "73a7e0ac2dc97733",  # returns_result → in:src (component tautology)
+  "4f97c9cefbfdc5f5",  # has_sig → kind:function (component tautology)
+  "223f8e6b07ea0cb4",  # naming:snake_case → kind:function (component tautology)
+  "f493f42a7c53952b",  # vis:pub → in:src (component tautology)
+  "a3faddb3050608a7",  # has_sig → in:src/tools (component tautology)
+  "d25649bda9c74187",  # naming:snake_case → in:src/tools (component tautology)
+  "63970155a83592d5",  # is_async → in:src (component tautology)
+  "9cdc34e162997a2a",  # is_async → has_sig (tautology)
+  "3121036935db34d6",  # is_async → naming:snake_case (grammar)
+]

@@ -523,7 +523,10 @@ fn apply_phase_defaults(phases: &[serde_json::Value]) -> Vec<serde_json::Value> 
         .enumerate()
         .map(|(i, p)| {
             let mut phase = p.clone();
-            let obj = phase.as_object_mut().unwrap();
+            let obj = phase.as_object_mut().expect(
+                "invariant: validate_phases runs first and requires a 'name' string on every \
+                 phase, which only a JSON object can carry",
+            );
             if !obj.contains_key("status") {
                 let status = if i == 0 { "active" } else { "pending" };
                 obj.insert("status".into(), serde_json::Value::String(status.into()));

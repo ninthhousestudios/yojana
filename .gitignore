@@ -1,6 +1,10 @@
 /target
 /.yojana
-.sutra/
+# sutra: ignore per-workspace index dirs and acks, track the governance config
+.sutra/*/
+.sutra/acks/
+!.sutra/rules.toml
+!.sutra/owners.toml
 index.db
 src/experiments/
 
