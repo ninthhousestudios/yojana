@@ -30,7 +30,6 @@ pub struct ProjectRow {
     pub description: String,
     pub status: String,
     pub parent_id: Option<Uuid>,
-    pub handoff: Option<String>,
     pub history: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -41,7 +40,6 @@ pub struct ProjectUpdates {
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
-    pub handoff: Option<Option<String>>,
 }
 
 // --- Arc types ---
@@ -240,7 +238,6 @@ fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRow> {
         description: row.get("description")?,
         status: row.get("status")?,
         parent_id,
-        handoff: row.get("handoff")?,
         history: row.get("history")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -590,11 +587,22 @@ impl Db {
                 "0007_completed_at",
                 include_str!("../migrations/0007_completed_at.sql"),
             ),
+            // 0008 added the project handoff column, 0011 drops it again (see
+            // yojana/41). 0008 stays listed so databases that already recorded
+            // it remain consistent; on a fresh database the pair cancels.
             (
                 "0008_project_handoff",
                 include_str!("../migrations/0008_project-handoff.sql"),
             ),
             ("0009_arcs", include_str!("../migrations/0009_arcs.sql")),
+            (
+                "0010_arc_task_index",
+                include_str!("../migrations/0010_arc-task-index.sql"),
+            ),
+            (
+                "0011_drop_project_handoff",
+                include_str!("../migrations/0011_drop-project-handoff.sql"),
+            ),
         ];
 
         let conn = self.conn.lock();
@@ -741,7 +749,7 @@ impl Db {
         let conn = self.conn.lock();
 
         let mut sql = String::from(
-            "SELECT p.id, p.slug, p.title, p.status, p.parent_id,              p.handoff IS NOT NULL AS has_handoff,              (SELECT COUNT(*) FROM projects c WHERE c.parent_id = p.id) AS child_count,              p.created_at, p.updated_at              FROM projects p",
+            "SELECT p.id, p.slug, p.title, p.status, p.parent_id,              (SELECT COUNT(*) FROM projects c WHERE c.parent_id = p.id) AS child_count,              p.created_at, p.updated_at              FROM projects p",
         );
         let mut conditions: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -799,10 +807,9 @@ impl Db {
                     title: row.get(2)?,
                     status: row.get(3)?,
                     parent_id: parent_id.map(|id| id.to_string()),
-                    has_handoff: row.get(5)?,
-                    child_count: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
+                    child_count: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -892,70 +899,21 @@ impl Db {
             }
         }
 
-        if let Some(ref handoff_opt) = updates.handoff {
-            let verb = if handoff_opt.is_some() {
-                "set"
-            } else {
-                "cleared"
-            };
-            let mut payload = serde_json::json!({"action": verb});
-            if let Some(ref prev) = project.handoff {
-                payload["previous"] = serde_json::json!(prev);
-            }
-            history.push(HistoryEntry {
-                ts: now,
-                kind: "handoff_updated".into(),
-                payload,
-                actor: Some(actor.to_string()),
-            });
-        }
-
         let new_title = updates.title.as_deref().unwrap_or(&project.title);
         let new_desc = updates
             .description
             .as_deref()
             .unwrap_or(&project.description);
         let new_status = updates.status.as_deref().unwrap_or(&project.status);
-        let new_handoff: Option<&str> = match updates.handoff {
-            Some(ref inner) => inner.as_deref(),
-            None => project.handoff.as_deref(),
-        };
         let history_json = serde_json::to_string(&history)?;
 
         conn.execute(
-            "UPDATE projects SET title=?1, description=?2, status=?3, handoff=?4, history=?5, updated_at=?6 WHERE id=?7",
-            rusqlite::params![new_title, new_desc, new_status, new_handoff, history_json, now, project.id.as_bytes().as_slice()],
+            "UPDATE projects SET title=?1, description=?2, status=?3, history=?4, updated_at=?5 WHERE id=?6",
+            rusqlite::params![new_title, new_desc, new_status, history_json, now, project.id.as_bytes().as_slice()],
         )?;
 
         get_by_id(&conn, &project.id)?
             .ok_or_else(|| YojanaError::NotFound("updated project".into()))
-    }
-
-    pub fn get_handoffs(&self, project_ids: &[Uuid]) -> Result<Vec<(String, String)>, YojanaError> {
-        if project_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.conn.lock();
-        let placeholders: Vec<String> = (1..=project_ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "SELECT slug, handoff FROM projects WHERE id IN ({}) AND handoff IS NOT NULL ORDER BY slug",
-            placeholders.join(", ")
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let params: Vec<Vec<u8>> = project_ids
-            .iter()
-            .map(|id| id.as_bytes().to_vec())
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
-            .iter()
-            .map(|p| p as &dyn rusqlite::types::ToSql)
-            .collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
     }
 
     // --- Task methods ---
@@ -3422,93 +3380,6 @@ mod tests {
         let task = db.get_task("chitta/research/1").unwrap().unwrap();
         assert_eq!(task.title, "Nested task");
         assert_eq!(task.project_slug, "chitta/research");
-    }
-
-    #[test]
-    fn handoff_set_and_clear() {
-        let db = test_db();
-        let proj = db
-            .create_project("htest", "Handoff Test", "", None, "test")
-            .unwrap();
-        assert!(proj.handoff.is_none());
-
-        let updated = db
-            .update_project(
-                None,
-                Some("htest"),
-                ProjectUpdates {
-                    handoff: Some(Some("pick up auth work".into())),
-                    ..Default::default()
-                },
-                "test",
-            )
-            .unwrap();
-        assert_eq!(updated.handoff.as_deref(), Some("pick up auth work"));
-
-        let cleared = db
-            .update_project(
-                None,
-                Some("htest"),
-                ProjectUpdates {
-                    handoff: Some(None),
-                    ..Default::default()
-                },
-                "test",
-            )
-            .unwrap();
-        assert!(cleared.handoff.is_none());
-    }
-
-    #[test]
-    fn get_handoffs_returns_only_set() {
-        let db = test_db();
-        db.create_project("ha", "A", "", None, "test").unwrap();
-        db.create_project("hb", "B", "", None, "test").unwrap();
-        db.update_project(
-            None,
-            Some("ha"),
-            ProjectUpdates {
-                handoff: Some(Some("handoff a".into())),
-                ..Default::default()
-            },
-            "test",
-        )
-        .unwrap();
-
-        let a = db.get_project(None, Some("ha")).unwrap().unwrap();
-        let b = db.get_project(None, Some("hb")).unwrap().unwrap();
-        let handoffs = db.get_handoffs(&[a.id, b.id]).unwrap();
-        assert_eq!(handoffs.len(), 1);
-        assert_eq!(handoffs[0].0, "ha");
-        assert_eq!(handoffs[0].1, "handoff a");
-    }
-
-    #[test]
-    fn get_handoffs_includes_descendants() {
-        let db = test_db();
-        let root = db
-            .create_project("parent", "Parent", "", None, "test")
-            .unwrap();
-        let _child = db
-            .create_project("parent/child", "Child", "", Some(root.id), "test")
-            .unwrap();
-        db.update_project(
-            None,
-            Some("parent/child"),
-            ProjectUpdates {
-                handoff: Some(Some("child handoff".into())),
-                ..Default::default()
-            },
-            "test",
-        )
-        .unwrap();
-
-        let all_ids = db.project_ids_with_descendants(&root.id).unwrap();
-        let mut ids = vec![root.id];
-        ids.extend(all_ids);
-        let handoffs = db.get_handoffs(&ids).unwrap();
-        assert_eq!(handoffs.len(), 1);
-        assert_eq!(handoffs[0].0, "parent/child");
     }
 
     // --- Arc tests ---

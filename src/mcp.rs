@@ -46,7 +46,7 @@ impl Clone for YojanaServer {
 #[tool_router(router = tool_router)]
 impl YojanaServer {
     #[tool(
-        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, handoff, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, has_handoff, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — supports handoff: set a string to write, empty string to clear). create/update return a slim ack {id, slug, status, title}; use action=get for full detail."
+        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change). create/update return a slim ack {id, slug, status, title}; use action=get for full detail."
     )]
     pub async fn yojana_project(
         &self,
@@ -101,7 +101,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Find tasks ready to start — status is ready-for-agent or ready-for-human with all depends_on targets done. Returns handoff notes (if any) before the ready list. Optional: project (id or slug) to scope to one project and its sub-projects; omit for cross-project (all active projects)."
+        description = "Find tasks ready to start — status is ready-for-agent or ready-for-human with all depends_on targets done. Optional: project (id or slug) to scope to one project and its sub-projects; omit for cross-project (all active projects)."
     )]
     pub async fn yojana_ready(
         &self,

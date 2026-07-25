@@ -185,12 +185,6 @@ pub fn format_project_detail(p: &ProjectRow) -> String {
         let desc = p.description.replace("\\n", "\n");
         out.push_str(&format!("\n{}\n", desc));
     }
-    if let Some(ref handoff) = p.handoff {
-        out.push_str(&format!(
-            "\nHandoff:\n  {}\n",
-            handoff.replace('\n', "\n  ")
-        ));
-    }
     out
 }
 
@@ -485,7 +479,6 @@ mod tests {
             description: "A test project".to_string(),
             status: "active".to_string(),
             parent_id: None,
-            handoff: None,
             history: "[]".to_string(),
             created_at: 1700000000000,
             updated_at: 1700000060000,

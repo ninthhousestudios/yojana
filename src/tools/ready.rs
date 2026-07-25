@@ -15,12 +15,6 @@ pub struct ReadyArgs {
 }
 
 #[derive(Debug, Serialize)]
-pub struct HandoffEntry {
-    pub project_slug: String,
-    pub handoff: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct ReadyItem {
     pub human_id: String,
     pub title: String,
@@ -34,8 +28,6 @@ pub struct ReadyItem {
 
 #[derive(Debug, Serialize)]
 pub struct ReadyResponse {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub handoffs: Vec<HandoffEntry>,
     pub ready: Vec<ReadyItem>,
 }
 
@@ -69,19 +61,6 @@ pub fn handle(db: &Db, args: ReadyArgs) -> Result<serde_json::Value, YojanaError
         .as_deref()
         .map(|p| resolve_project_ids(db, p))
         .transpose()?;
-
-    let handoffs = if let Some(ref ids) = project_ids {
-        db.get_handoffs(ids)?
-    } else {
-        db.get_handoffs(&all_active_project_ids(db)?)?
-    };
-    let handoff_entries: Vec<HandoffEntry> = handoffs
-        .into_iter()
-        .map(|(slug, text)| HandoffEntry {
-            project_slug: slug,
-            handoff: text,
-        })
-        .collect();
 
     let deps = db.list_depends_on_with_status()?;
 
@@ -135,15 +114,7 @@ pub fn handle(db: &Db, args: ReadyArgs) -> Result<serde_json::Value, YojanaError
         }
     }
 
-    Ok(serde_json::to_value(ReadyResponse {
-        handoffs: handoff_entries,
-        ready: ready_tasks,
-    })?)
-}
-
-fn all_active_project_ids(db: &Db) -> Result<Vec<Uuid>, YojanaError> {
-    let projects = db.list_projects(Some("active"), None, None, None)?;
-    Ok(projects.into_iter().map(|p| p.id).collect())
+    Ok(serde_json::to_value(ReadyResponse { ready: ready_tasks })?)
 }
 
 #[cfg(test)]
