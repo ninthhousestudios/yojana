@@ -89,6 +89,19 @@ severity = "advisory"
 # ═══════════════════════════════════════════════════════════════════
 # Full catalog adopted. Guard uses introduced-only semantics: pre-existing
 # matches are grandfathered, so these fire on new code, not on history.
+#
+# Duplicate-rule principle: a forbidden_pattern that duplicates a clippy lint
+# already in Cargo.toml [lints.clippy] must be blocking, or it should not
+# exist. At advisory it is the same warning twice. Blocking buys edit-time
+# interception, which clippy structurally cannot provide. no-unwrap and
+# no-todo-unimplemented are the two duplicates (unwrap_used, todo,
+# unimplemented); both are blocking, and clippy stays at warn as the backstop
+# for code sutra's scope does not cover.
+#
+# Test code is excluded from these on both the review and guard paths
+# (sutra/290), so blocking does not obstruct `.unwrap()` inside
+# #[cfg(test)] modules. Verified 2026-07-25: zero production matches for
+# either rule.
 
 [[constraint]]
 kind = "forbidden_pattern"
@@ -135,7 +148,7 @@ language = "rust"
 query = '(macro_invocation macro: (identifier) @m (#match? @m "^(todo|unimplemented)$")) @match'
 scope = "src/"
 name = "no-todo-unimplemented"
-severity = "advisory"
+severity = "blocking"
 provenance = "vidhi/language-rules/rust.toml — No stubbed control flow in committed code"
 
 [[constraint]]
@@ -144,7 +157,7 @@ language = "rust"
 query = '(call_expression function: (field_expression field: (field_identifier) @m (#eq? @m "unwrap"))) @match'
 scope = "src/"
 name = "no-unwrap"
-severity = "advisory"
+severity = "blocking"
 provenance = "vidhi/language-rules/rust.toml — Panics carry invariant messages"
 
 # ═══════════════════════════════════════════════════════════════════
