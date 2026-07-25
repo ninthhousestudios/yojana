@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::db::{ArcRow, ProjectRow, TaskRow};
 use crate::graph::ForestNode;
+use crate::tools::acceptance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeDirection {
@@ -264,17 +265,23 @@ pub fn format_task_detail(
         out.push_str(&format!("\n{}\n", desc));
     }
 
-    #[derive(serde::Deserialize)]
-    struct Criterion {
-        text: String,
-        done: bool,
-    }
-    let criteria: Vec<Criterion> = serde_json::from_str(&t.acceptance_criteria).unwrap_or_default();
-    if !criteria.is_empty() {
-        out.push_str("\nAcceptance Criteria:\n");
-        for c in &criteria {
-            let mark = if c.done { "[x]" } else { "[ ]" };
-            out.push_str(&format!("  {} {}\n", mark, c.text));
+    // A criteria value we cannot parse must not render as absence — acceptance
+    // criteria are the spec, and silently showing none is worse than an error.
+    match acceptance::parse_stored(&t.acceptance_criteria) {
+        Ok(criteria) if !criteria.is_empty() => {
+            out.push_str("\nAcceptance Criteria:\n");
+            for c in &criteria {
+                let mark = if c.done { "[x]" } else { "[ ]" };
+                out.push_str(&format!("  {} {}\n", mark, c.text));
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("unreadable acceptance_criteria for {}: {e}", t.id);
+            out.push_str(&format!(
+                "\nAcceptance Criteria:\n  <unreadable: {e}>\n  raw: {}\n",
+                t.acceptance_criteria
+            ));
         }
     }
 
@@ -587,6 +594,27 @@ mod tests {
         let out = format_task_detail(&t, &[], &[], None);
         assert!(!out.contains("Acceptance Criteria:"));
         assert!(!out.contains("Decisions:"));
+    }
+
+    #[test]
+    fn task_detail_renders_string_form_criteria() {
+        let mut t = sample_task();
+        t.acceptance_criteria = r#"["it works","it's fast"]"#.to_string();
+        let out = format_task_detail(&t, &[], &[], None);
+        assert!(out.contains("Acceptance Criteria:"));
+        assert!(out.contains("[ ] it works"));
+        assert!(out.contains("[ ] it's fast"));
+    }
+
+    #[test]
+    fn task_detail_marks_unreadable_criteria_instead_of_hiding_them() {
+        let mut t = sample_task();
+        t.acceptance_criteria = r#"[{"note":"wrong shape"}]"#.to_string();
+        let out = format_task_detail(&t, &[], &[], None);
+        assert!(
+            out.contains("Acceptance Criteria:") && out.contains("<unreadable:"),
+            "unparseable criteria must not present as absence, got:\n{out}"
+        );
     }
 
     #[test]

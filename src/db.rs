@@ -603,6 +603,10 @@ impl Db {
                 "0011_drop_project_handoff",
                 include_str!("../migrations/0011_drop-project-handoff.sql"),
             ),
+            (
+                "0012_normalize_acceptance_criteria",
+                include_str!("../migrations/0012_normalize-acceptance-criteria.sql"),
+            ),
         ];
 
         let conn = self.conn.lock();
@@ -3144,6 +3148,76 @@ mod tests {
         assert!(
             count >= 5,
             "expected at least 5 migrations applied, got {count}"
+        );
+    }
+
+    /// The 0012 backfill has to run against rows that already exist, so seed the
+    /// legacy shapes, unrecord the migration, and re-run it.
+    #[test]
+    fn acceptance_criteria_backfill_normalizes_string_form() {
+        let db = test_db();
+        db.create_project("proj", "Project", "", None, "test")
+            .unwrap();
+        let string_form = create_test_task(&db, "proj", "String form");
+        let object_form = create_test_task(&db, "proj", "Object form");
+        let empty = create_test_task(&db, "proj", "Empty");
+        let mixed = create_test_task(&db, "proj", "Mixed form");
+
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "UPDATE tasks SET acceptance_criteria = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    r#"["first","second"]"#,
+                    string_form.id.as_bytes().as_slice()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE tasks SET acceptance_criteria = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    r#"[{"text":"kept","done":true}]"#,
+                    object_form.id.as_bytes().as_slice()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE tasks SET acceptance_criteria = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    r#"["loose",{"text":"typed","done":true}]"#,
+                    mixed.id.as_bytes().as_slice()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "DELETE FROM _yojana_migrations WHERE name = '0012_normalize_acceptance_criteria'",
+                [],
+            )
+            .unwrap();
+        }
+        db.run_migrations().unwrap();
+
+        let migrated = db.get_task(&string_form.id.to_string()).unwrap().unwrap();
+        assert_eq!(
+            migrated.acceptance_criteria,
+            r#"[{"text":"first","done":false},{"text":"second","done":false}]"#,
+            "string form should become object form with order preserved"
+        );
+
+        let untouched = db.get_task(&object_form.id.to_string()).unwrap().unwrap();
+        assert_eq!(
+            untouched.acceptance_criteria, r#"[{"text":"kept","done":true}]"#,
+            "object form should be left alone"
+        );
+
+        let still_empty = db.get_task(&empty.id.to_string()).unwrap().unwrap();
+        assert_eq!(still_empty.acceptance_criteria, "[]");
+
+        let mixed = db.get_task(&mixed.id.to_string()).unwrap().unwrap();
+        assert_eq!(
+            mixed.acceptance_criteria,
+            r#"[{"text":"loose","done":false},{"text":"typed","done":true}]"#,
+            "a mixed array should normalize the strings and keep the objects"
         );
     }
 

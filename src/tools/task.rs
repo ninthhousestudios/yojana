@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
+use crate::tools::acceptance::{self, AcceptanceCriterionInput};
 use crate::tools::context_ref::{ContextRef, RefType};
 
 fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -108,7 +109,7 @@ pub struct TaskArgs {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub slice_type: Option<Option<SliceType>>,
     #[serde(default)]
-    pub acceptance_criteria: Option<Vec<serde_json::Value>>,
+    pub acceptance_criteria: Option<Vec<AcceptanceCriterionInput>>,
     #[serde(default)]
     pub decisions: Option<Vec<serde_json::Value>>,
     #[serde(default)]
@@ -288,7 +289,9 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 category: args.category.flatten().map(|c| c.as_ref().to_string()),
                 status: args.status.map(|s| s.as_ref().to_string()),
                 slice_type: args.slice_type.flatten().map(|s| s.as_ref().to_string()),
-                acceptance_criteria: to_json(&args.acceptance_criteria.unwrap_or_default())?,
+                acceptance_criteria: to_json(&acceptance::normalize(
+                    args.acceptance_criteria.unwrap_or_default(),
+                ))?,
                 decisions: to_json(&args.decisions.unwrap_or_default())?,
                 context_refs: to_json(refs)?,
                 files: to_json(&args.files.unwrap_or_default())?,
@@ -384,7 +387,10 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 status: args.status.map(|s| s.as_ref().to_string()),
                 force_status: false,
                 slice_type: args.slice_type.map(|o| o.map(|s| s.as_ref().to_string())),
-                acceptance_criteria: args.acceptance_criteria.map(|v| to_json(&v)).transpose()?,
+                acceptance_criteria: args
+                    .acceptance_criteria
+                    .map(|v| to_json(&acceptance::normalize(v)))
+                    .transpose()?,
                 decisions: args.decisions.map(|v| to_json(&v)).transpose()?,
                 implementation_plan: args.implementation_plan,
                 execution_record: args.execution_record,
@@ -443,10 +449,12 @@ mod tests {
         );
         // Guards the yojana/32 schema diet: the hot-path schema reloads several
         // times per long session, so keep it lean. Budget raised from 450→550
-        // in yojana/34 to accommodate the typed ContextRef item schema.
+        // in yojana/34 to accommodate the typed ContextRef item schema, and
+        // 550→620 in yojana/42 for the typed acceptance_criteria item schema
+        // (the untyped `items: true` was what let two storage shapes in).
         assert!(
-            est_tokens <= 550,
-            "TaskArgs schema grew to ~{est_tokens} tokens (>550); did a field description sneak back in?"
+            est_tokens <= 620,
+            "TaskArgs schema grew to ~{est_tokens} tokens (>620); did a field description sneak back in?"
         );
     }
 
