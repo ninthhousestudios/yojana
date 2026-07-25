@@ -4,21 +4,25 @@ use std::process::{Command, Stdio};
 use yojana::config::Config;
 use yojana::db::Db;
 
+/// Tests run as threads in one process, so the clock alone does not separate
+/// them — two threads can read the same nanosecond and then race each other's
+/// migrations. The counter guarantees distinct paths.
 fn unique_db() -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static RUN_ID: std::sync::LazyLock<u128> = std::sync::LazyLock::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("invariant: system clock is after the unix epoch")
+            .as_nanos()
+    });
     let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("yojana-todo-cli-{pid}-{nanos}.db"))
+    let run = *RUN_ID;
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("yojana-todo-cli-{pid}-{run}-{n}.db"))
 }
 
 fn seed(db_path: &std::path::Path) -> Db {
-    unsafe {
-        std::env::set_var("YOJANA_DB_PATH", db_path);
-    }
-    let config = Config::from_env();
-    Db::open(&config).unwrap()
+    Db::open(&Config::for_path(db_path)).unwrap()
 }
 
 fn cli() -> Command {

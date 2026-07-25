@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+const DEFAULT_HOST: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 4200;
+
 pub struct Config {
     pub db_path: PathBuf,
     pub host: String,
@@ -10,8 +13,20 @@ impl Config {
     pub fn from_env() -> Self {
         Self {
             db_path: parse_env_or("YOJANA_DB_PATH", default_db_path()),
-            host: parse_env_or("YOJANA_HOST", "127.0.0.1".into()),
-            port: parse_env_or("YOJANA_PORT", 4200),
+            host: parse_env_or("YOJANA_HOST", DEFAULT_HOST.into()),
+            port: parse_env_or("YOJANA_PORT", DEFAULT_PORT),
+        }
+    }
+
+    /// Config for an explicit database path, with defaults for everything else.
+    ///
+    /// Lets callers (notably tests) get a `Config` without mutating the process
+    /// environment, which is a data race when tests run in parallel threads.
+    pub fn for_path(db_path: impl Into<PathBuf>) -> Self {
+        Self {
+            db_path: db_path.into(),
+            host: DEFAULT_HOST.into(),
+            port: DEFAULT_PORT,
         }
     }
 
