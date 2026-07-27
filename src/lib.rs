@@ -1,5 +1,7 @@
+pub mod acceptance;
 pub mod config;
 pub mod context;
+pub mod context_ref;
 pub mod db;
 pub mod display;
 pub mod error;

@@ -2,10 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+use crate::acceptance::{self, AcceptanceCriterionInput};
+use crate::context_ref::{ContextRef, RefType};
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
-use crate::tools::acceptance::{self, AcceptanceCriterionInput};
-use crate::tools::context_ref::{ContextRef, RefType};
 
 fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where

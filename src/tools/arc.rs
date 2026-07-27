@@ -2,9 +2,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::context_ref::ContextRef;
 use crate::db::{ArcRow, ArcUpdates, CreateArcParams, Db, HistoryEntry};
 use crate::error::YojanaError;
-use crate::tools::context_ref::ContextRef;
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -595,7 +595,7 @@ mod tests {
 
         let mut args = arc_args("update", "proj/~1");
         args.context_refs = Some(vec![ContextRef {
-            ref_type: crate::tools::context_ref::RefType::DocPath,
+            ref_type: crate::context_ref::RefType::DocPath,
             value: "foo.md".into(),
             label: None,
         }]);

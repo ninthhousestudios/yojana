@@ -192,7 +192,7 @@ fn full_flow_v0() {
     assert_eq!(working_b.context_refs.len(), 1);
     assert_eq!(
         working_b.context_refs[0].ref_type,
-        yojana::tools::context_ref::RefType::GitCommit
+        yojana::context_ref::RefType::GitCommit
     );
 
     // 11. Query by status=done — only A

@@ -64,18 +64,19 @@ provenance = "docs/yojana-design.md § context_refs — resolution lives in mana
 #   tools   src/tools/*, mcp.rs
 #   entry   main.rs, display.rs
 #
-# The one upward edge today is context.rs → tools/context_ref.rs: the domain
-# context builder reaching into the MCP tool layer for the ContextRef shape.
-# ContextRef is really a domain type living in the wrong module. Advisory
-# until it moves.
+# The domain layer must not depend on the tool layer: tools/ marshals the MCP
+# wire surface and sits downstream of domain. Domain types that were once
+# addressed through tools/ (ContextRef/RefType, acceptance parsing) now live in
+# their own crate-root modules (src/context_ref.rs, src/acceptance.rs), so this
+# constraint holds with no exceptions to grandfather.
 
 [[constraint]]
 kind = "forbidden_dep"
 from = "src/context.rs"
 to = "src/tools/**"
 name = "domain-must-not-import-tools"
-severity = "advisory"
-provenance = "import-graph analysis — ContextRef is misplaced in the tool layer"
+severity = "blocking"
+provenance = "layering invariant — domain (context.rs) sits upstream of the tool layer and must not import from it"
 
 [[constraint]]
 kind = "max_fan_in"
