@@ -136,6 +136,8 @@ enum Command {
         #[arg(short = 'm', long = "message")]
         message: Option<String>,
     },
+    /// Regenerate the in-repo task manifest (.yojana/manifest.jsonl) from the DB.
+    Export,
 }
 
 #[tokio::main]
@@ -591,6 +593,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{} → wontfix ({})", human_id, reason_tag);
             Ok(())
         }
+        Command::Export => yojana::export::run(std::env::current_dir()?),
     }
 }
 

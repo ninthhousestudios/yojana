@@ -5,6 +5,7 @@ pub mod context_ref;
 pub mod db;
 pub mod display;
 pub mod error;
+pub mod export;
 pub mod graph;
 pub mod mcp;
 pub mod state;
