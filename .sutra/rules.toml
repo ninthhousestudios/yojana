@@ -160,3 +160,22 @@ scope = "src/"
 name = "no-unwrap"
 severity = "blocking"
 provenance = "vidhi/language-rules/rust.toml — Panics carry invariant messages"
+
+# ═══════════════════════════════════════════════════════════════════
+# Export serializer purity — checkpoint:yojana/53 (2026-08-06)
+# ═══════════════════════════════════════════════════════════════════
+# manifest.rs is the deep, pure module of the export subsystem: TaskRow -> bytes,
+# no I/O. writer.rs owns all filesystem access. rusqlite is already confined to
+# db.rs (sqlite-behind-db-layer), so this guards the remaining escape hatch —
+# direct std filesystem/process I/O leaking into the serializer as the records
+# layer (yojana/51 I4/I11/I13) grows it. Clean at authoring time (manifest.rs
+# imports only serde + crate::db::TaskRow), so blocking, not advisory.
+
+[[constraint]]
+kind = "forbidden_pattern"
+language = "rust"
+query = '(scoped_identifier path: (identifier) @s name: (identifier) @f (#eq? @s "std") (#match? @f "^(fs|io|net|process)$")) @match'
+scope = "src/export/manifest.rs"
+name = "serializer-no-io"
+severity = "blocking"
+provenance = "docs/yojana-design.md § purity — manifest is a pure TaskRow->bytes serializer; writer.rs owns I/O"
