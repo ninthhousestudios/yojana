@@ -61,6 +61,45 @@ pub fn serialize_manifest(tasks: &[TaskRow]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
+
+    /// A minimal `TaskRow` for exercising `line_of` directly. Only the four
+    /// fields the mapping reads (`project_slug`, `sequence_number`, `title`,
+    /// `status`, `completed_at`) carry meaning; the rest are inert filler.
+    fn task_row(
+        slug: &str,
+        seq: i64,
+        title: &str,
+        status: &str,
+        completed_at: Option<i64>,
+    ) -> TaskRow {
+        TaskRow {
+            id: Uuid::nil(),
+            project_id: Uuid::nil(),
+            project_slug: slug.to_string(),
+            sequence_number: seq,
+            title: title.to_string(),
+            description: String::new(),
+            category: None,
+            status: status.to_string(),
+            slice_type: None,
+            acceptance_criteria: "[]".to_string(),
+            decisions: "[]".to_string(),
+            implementation_plan: None,
+            execution_record: None,
+            reproduction: None,
+            root_cause: None,
+            context_refs: "[]".to_string(),
+            files: "[]".to_string(),
+            tags: "[]".to_string(),
+            history: "[]".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            completed_at,
+            arc_id: None,
+            arc_phase: None,
+        }
+    }
 
     fn line(
         slug: &str,
@@ -121,5 +160,31 @@ mod tests {
             ])
         };
         assert_eq!(build(), build());
+    }
+
+    #[test]
+    fn line_of_maps_taskrow_fields() {
+        // The production path (serialize_manifest -> line_of) is the only place
+        // real TaskRow fields are read: the {slug}/{seq} id and the
+        // completed_at -> closed_at remap. The other tests build ManifestLines
+        // by hand and never exercise it.
+        let (key, mline) = line_of(&task_row("yojana", 42, "Ship it", "done", Some(999)));
+        assert_eq!(key, ("yojana".to_string(), 42));
+        let bytes = serialize_lines(vec![(key, mline)]);
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "{\"id\":\"yojana/42\",\"title\":\"Ship it\",\"status\":\"done\",\"closed_at\":999}\n"
+        );
+    }
+
+    #[test]
+    fn line_of_open_task_maps_null_closed_at() {
+        let (key, mline) = line_of(&task_row("beads", 3, "WIP", "in-progress", None));
+        assert_eq!(key, ("beads".to_string(), 3));
+        let bytes = serialize_lines(vec![(key, mline)]);
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "{\"id\":\"beads/3\",\"title\":\"WIP\",\"status\":\"in-progress\",\"closed_at\":null}\n"
+        );
     }
 }
