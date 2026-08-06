@@ -15,14 +15,20 @@ use crate::db::Db;
 
 /// Repo-side export config (`.yojana/export.toml`), PRD I15.
 ///
-/// The full schema is `{ project, records }` (I15), but this slice ships the
-/// manifest layer only. serde ignores unknown fields by default, so a config
-/// that already carries `records` parses cleanly here; the field is added to
-/// this struct when the records slice starts consuming it.
+/// Schema is `{ project, records }`. `records` defaults to `true` — the
+/// operator wants both layers in v1; a repo whose git log already tells the
+/// story sets `records = false` to suppress the records layer (story 18).
 #[derive(Debug, Deserialize)]
 pub struct ExportConfig {
     /// Root project slug; its descendant workstreams are auto-included.
     pub project: String,
+    /// Whether to emit the full-record layer for terminal tasks (I4/I15).
+    #[serde(default = "default_records")]
+    pub records: bool,
+}
+
+fn default_records() -> bool {
+    true
 }
 
 /// A resolved binding: the repo root (the directory containing `.yojana/`) and
@@ -102,13 +108,21 @@ mod tests {
     }
 
     #[test]
-    fn unknown_records_key_still_parses() {
-        // Forward-compat: a config already carrying the records field (I15)
-        // parses cleanly even though this slice does not consume it.
+    fn records_defaults_to_true_when_absent() {
+        // I15: records defaults on; a config that omits it still gets the layer.
+        let root = unique_dir();
+        write_config(&root, "project = \"yojana\"\n");
+        let binding = find_config(&root).unwrap();
+        assert!(binding.config.records);
+    }
+
+    #[test]
+    fn records_false_is_honored() {
+        // Story 18: a repo can suppress the records layer per-repo.
         let root = unique_dir();
         write_config(&root, "project = \"yojana\"\nrecords = false\n");
         let binding = find_config(&root).unwrap();
-        assert_eq!(binding.config.project, "yojana");
+        assert!(!binding.config.records);
     }
 
     #[test]

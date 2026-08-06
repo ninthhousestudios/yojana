@@ -10,14 +10,18 @@
 
 mod binding;
 mod manifest;
+mod record;
 mod writer;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::db::{Db, TaskQueryFilter};
+use crate::db::{Db, TERMINAL_STATUSES, TaskQueryFilter, TaskRow};
+use crate::tools::task::TaskOutput;
+use writer::RecordFile;
 
 /// Run `yojana export`, starting the config walk-up from `cwd`.
 pub fn run(cwd: PathBuf) -> anyhow::Result<()> {
@@ -31,13 +35,78 @@ pub fn run(cwd: PathBuf) -> anyhow::Result<()> {
     let bytes = manifest::serialize_manifest(&tasks);
     writer::write_manifest(&binding.repo_root, &bytes)?;
     writer::ensure_gitattributes(&binding.repo_root)?;
+    let task_count = tasks.len();
+
+    // Optional full-record layer for terminal tasks (PRD I4). Reconcile runs
+    // even for an empty batch so a task that just left terminal has its record
+    // dropped (I11); records=false skips the layer entirely (story 18) and,
+    // deliberately, leaves any existing records/ untouched.
+    let records_note = if binding.config.records {
+        let records = collect_record_files(&db, tasks)?;
+        let expected: HashSet<String> = records.iter().map(|r| r.filename.clone()).collect();
+        writer::write_records(&binding.repo_root, &records)?;
+        writer::reconcile_records(&binding.repo_root, &expected)?;
+        format!(", {} record(s) to .yojana/records/", records.len())
+    } else {
+        String::new()
+    };
 
     println!(
-        "wrote {} task(s) to {}",
-        tasks.len(),
-        binding.repo_root.join(".yojana/manifest.jsonl").display()
+        "wrote {} task(s) to {}{}",
+        task_count,
+        binding.repo_root.join(".yojana/manifest.jsonl").display(),
+        records_note,
     );
     Ok(())
+}
+
+/// Build one record file per terminal task: the full task envelope
+/// (`TaskOutput` with conversation messages) plus its incident edges, each
+/// endpoint resolved to a human id. Split out of [`run`] so it is testable over
+/// an in-memory DB without the env-backed `Db::open` path.
+///
+/// Edges can leave the exported subtree (a cross-project `depends_on`), so the
+/// endpoint->human_id map seeds from the loaded subtree and falls back to a DB
+/// lookup for any endpoint not already present.
+fn collect_record_files(db: &Db, tasks: Vec<TaskRow>) -> anyhow::Result<Vec<RecordFile>> {
+    // Seed the endpoint->human_id map from the whole subtree before consuming
+    // the rows, so an intra-subtree edge resolves without a DB round-trip.
+    let mut human: HashMap<Uuid, String> = tasks
+        .iter()
+        .map(|t| (t.id, format!("{}/{}", t.project_slug, t.sequence_number)))
+        .collect();
+
+    let mut out = Vec::new();
+    for row in tasks
+        .into_iter()
+        .filter(|t| TERMINAL_STATUSES.contains(&t.status.as_str()))
+    {
+        let task_id = row.id;
+        let filename = record::record_filename(&row.project_slug, row.sequence_number);
+        let edges = db.list_edges_for_task(&task_id)?;
+        for end in edges
+            .iter()
+            .flat_map(|e| [e.source_task_id, e.target_task_id])
+        {
+            if !human.contains_key(&end)
+                && let Some(t) = db.get_task(&end.to_string())?
+            {
+                human.insert(end, format!("{}/{}", t.project_slug, t.sequence_number));
+            }
+        }
+
+        let mut task = TaskOutput::from(row);
+        task.messages = db.get_conversation_messages(&task_id)?;
+        let env = record::RecordEnvelope {
+            task,
+            edges: record::record_edges(&edges, &human),
+        };
+        out.push(RecordFile {
+            filename,
+            bytes: record::serialize_record(&env),
+        });
+    }
+    Ok(out)
 }
 
 /// Build the query filter export uses: the resolved subtree, every status
@@ -54,9 +123,10 @@ fn export_filter(project_ids: Vec<Uuid>) -> TaskQueryFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::CreateTaskParams;
+    use crate::db::{CreateTaskParams, TaskUpdates};
+    use crate::export::test_support::unique_dir;
 
-    fn make_task(db: &Db, project_id: Uuid, project_slug: &str, title: &str) {
+    fn make_task(db: &Db, project_id: Uuid, project_slug: &str, title: &str) -> TaskRow {
         db.create_task(
             CreateTaskParams {
                 project_id,
@@ -80,7 +150,32 @@ mod tests {
             },
             "test",
         )
+        .unwrap()
+    }
+
+    /// Jump a task straight to `status`, bypassing transition validation — the
+    /// records layer only cares about terminal membership, not how it got there.
+    fn set_status(db: &Db, id: &Uuid, status: &str) {
+        db.update_task(
+            &id.to_string(),
+            TaskUpdates {
+                status: Some(status.to_string()),
+                force_status: true,
+                ..Default::default()
+            },
+            "test",
+        )
         .unwrap();
+    }
+
+    fn record_names(db: &Db) -> Vec<String> {
+        let mut names: Vec<String> = collect_record_files(db, subtree(db))
+            .unwrap()
+            .into_iter()
+            .map(|r| r.filename)
+            .collect();
+        names.sort();
+        names
     }
 
     /// End-to-end over a real DB subtree: descendant expansion -> export_filter
@@ -126,6 +221,121 @@ mod tests {
         let reids = binding::resolve_project_ids(&db, "root").unwrap();
         let retasks = db.list_tasks(&export_filter(reids)).unwrap();
         assert_eq!(bytes, manifest::serialize_manifest(&retasks));
+    }
+
+    fn export_db() -> (Db, Uuid, String) {
+        let db = Db::open_in_memory().unwrap();
+        let root = db.create_project("root", "Root", "", None, "test").unwrap();
+        (db, root.id, root.slug)
+    }
+
+    fn subtree(db: &Db) -> Vec<TaskRow> {
+        let ids = binding::resolve_project_ids(db, "root").unwrap();
+        db.list_tasks(&export_filter(ids)).unwrap()
+    }
+
+    /// AC1 (I4/I5): records only for terminal tasks. A done and a wontfix task
+    /// each get a file; open tasks (in-progress, ready-for-agent) do not.
+    #[test]
+    fn records_only_for_terminal_tasks() {
+        let (db, pid, slug) = export_db();
+        let done = make_task(&db, pid, &slug, "done one");
+        let wontfix = make_task(&db, pid, &slug, "wontfix one");
+        let wip = make_task(&db, pid, &slug, "in progress");
+        make_task(&db, pid, &slug, "still queued"); // ready-for-agent/needs-triage
+        set_status(&db, &done.id, "done");
+        set_status(&db, &wontfix.id, "wontfix");
+        set_status(&db, &wip.id, "in-progress");
+
+        assert_eq!(
+            record_names(&db),
+            vec!["root-1.json".to_string(), "root-2.json".to_string()],
+        );
+    }
+
+    /// AC3 (story 8): a comment appended after a task is done shows up in its
+    /// record on the next collect — the operator's done-then-review workflow.
+    #[test]
+    fn record_updates_after_post_close_comment() {
+        let (db, pid, slug) = export_db();
+        let t = make_task(&db, pid, &slug, "review me");
+        set_status(&db, &t.id, "done");
+
+        let before = collect_record_files(&db, subtree(&db)).unwrap();
+        db.append_conversation_message(&t.id, "LGTM, shipped", Some("josh"))
+            .unwrap();
+        let after = collect_record_files(&db, subtree(&db)).unwrap();
+
+        assert_ne!(
+            before[0].bytes, after[0].bytes,
+            "record did not pick up the note"
+        );
+        let text = String::from_utf8(after[0].bytes.clone()).unwrap();
+        assert!(
+            text.contains("LGTM, shipped"),
+            "note missing from record:\n{text}"
+        );
+    }
+
+    /// AC4 (I11): a record written on run 1 is dropped on run 2 once its task
+    /// leaves terminal (a reopen), and the still-terminal record survives.
+    #[test]
+    fn reconcile_removes_record_when_task_leaves_terminal() {
+        let (db, pid, slug) = export_db();
+        let reopened = make_task(&db, pid, &slug, "will reopen");
+        let stays = make_task(&db, pid, &slug, "stays done");
+        set_status(&db, &reopened.id, "done");
+        set_status(&db, &stays.id, "done");
+        let root = unique_dir();
+
+        // Run 1: both terminal -> both records on disk.
+        let run1 = collect_record_files(&db, subtree(&db)).unwrap();
+        let expected1: HashSet<String> = run1.iter().map(|r| r.filename.clone()).collect();
+        writer::write_records(&root, &run1).unwrap();
+        writer::reconcile_records(&root, &expected1).unwrap();
+        let records_dir = root.join(".yojana").join("records");
+        assert!(records_dir.join("root-1.json").exists());
+        assert!(records_dir.join("root-2.json").exists());
+
+        // Run 2: reopen root-1 -> only root-2 remains terminal.
+        set_status(&db, &reopened.id, "needs-triage");
+        let run2 = collect_record_files(&db, subtree(&db)).unwrap();
+        let expected2: HashSet<String> = run2.iter().map(|r| r.filename.clone()).collect();
+        writer::write_records(&root, &run2).unwrap();
+        writer::reconcile_records(&root, &expected2).unwrap();
+        assert!(
+            !records_dir.join("root-1.json").exists(),
+            "reopened record kept"
+        );
+        assert!(
+            records_dir.join("root-2.json").exists(),
+            "live record dropped"
+        );
+    }
+
+    /// AC6 (I2): re-collecting against an unchanged DB is byte-identical,
+    /// including a task carrying an incident edge and a conversation message.
+    #[test]
+    fn records_layer_deterministic() {
+        let (db, pid, slug) = export_db();
+        let a = make_task(&db, pid, &slug, "task a");
+        let b = make_task(&db, pid, &slug, "task b");
+        set_status(&db, &a.id, "done");
+        set_status(&db, &b.id, "done");
+        db.create_edge(a.id, b.id, "depends_on", None).unwrap();
+        db.append_conversation_message(&a.id, "note", None).unwrap();
+
+        let first = collect_record_files(&db, subtree(&db)).unwrap();
+        let second = collect_record_files(&db, subtree(&db)).unwrap();
+        let bytes = |v: &[RecordFile]| v.iter().map(|r| r.bytes.clone()).collect::<Vec<_>>();
+        assert_eq!(bytes(&first), bytes(&second));
+
+        // The edge endpoint resolved to a human id, not a raw UUID.
+        let text = String::from_utf8(first[0].bytes.clone()).unwrap();
+        assert!(
+            text.contains("\"target\": \"root/2\""),
+            "edge not resolved:\n{text}"
+        );
     }
 }
 
