@@ -36,8 +36,8 @@ impl YojanaServer {
 impl Clone for YojanaServer {
     fn clone(&self) -> Self {
         Self {
-            db: self.db.clone(),
-            config: self.config.clone(),
+            db: Arc::clone(&self.db),
+            config: Arc::clone(&self.config),
             tool_router: Self::tool_router(),
         }
     }

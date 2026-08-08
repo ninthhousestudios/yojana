@@ -673,7 +673,7 @@ async fn serve_http() -> anyhow::Result<()> {
         StreamableHttpServerConfig::default().with_cancellation_token(cancel.clone());
 
     let mcp_service = StreamableHttpService::new(
-        move || Ok(YojanaServer::new(db.clone(), config.clone())),
+        move || Ok(YojanaServer::new(Arc::clone(&db), Arc::clone(&config))),
         session_manager,
         shttp_config,
     );
