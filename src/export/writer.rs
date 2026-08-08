@@ -56,6 +56,8 @@ pub fn ensure_gitattributes(repo_root: &Path) -> anyhow::Result<()> {
 /// Write each record under `.yojana/records/` via temp-file + atomic rename, so
 /// a reader never observes a half-written record. A no-op for an empty batch —
 /// the directory is only created when there is at least one record to write.
+/// A record's filename embeds its slug (`sutra/needs-designing-15.json`), so a
+/// descendant workstream lands in a subdirectory that must be created first.
 pub fn write_records(repo_root: &Path, records: &[RecordFile]) -> anyhow::Result<()> {
     if records.is_empty() {
         return Ok(());
@@ -63,8 +65,12 @@ pub fn write_records(repo_root: &Path, records: &[RecordFile]) -> anyhow::Result
     let dir = repo_root.join(".yojana").join("records");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     for record in records {
-        let tmp = dir.join(format!("{}.tmp", record.filename));
         let final_path = dir.join(&record.filename);
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        let tmp = final_path.with_extension("json.tmp");
         std::fs::write(&tmp, &record.bytes)
             .with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, &final_path)
@@ -76,18 +82,39 @@ pub fn write_records(repo_root: &Path, records: &[RecordFile]) -> anyhow::Result
 /// Drop record files no longer backed by a terminal task (PRD I11 — records
 /// reflect *current* terminal membership). Conservative: only `.json` files
 /// under `records/` that are absent from `expected` are removed. A no-op when
-/// the directory does not exist (nothing was ever written).
+/// the directory does not exist (nothing was ever written). `expected` keys are
+/// slug-qualified filenames (`sutra/needs-designing-15.json`), so the walk must
+/// descend into per-slug subdirectories and match on the path relative to
+/// `records/`, not the bare file name.
 pub fn reconcile_records(repo_root: &Path, expected: &HashSet<String>) -> anyhow::Result<()> {
     let dir = repo_root.join(".yojana").join("records");
     if !dir.is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+    reconcile_dir(&dir, &dir, expected)
+}
+
+/// Recurse `current` (under `root`), removing stale `.json` records. The name
+/// compared against `expected` is the slash-joined path relative to `root`, to
+/// mirror `record_filename`'s slug-qualified form.
+fn reconcile_dir(root: &Path, current: &Path, expected: &HashSet<String>) -> anyhow::Result<()> {
+    for entry in
+        std::fs::read_dir(current).with_context(|| format!("reading {}", current.display()))?
+    {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if path.is_dir() {
+            reconcile_dir(root, &path, expected)?;
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .expect("invariant: walked path lies under records/ root");
+        let name = rel
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
         if name.ends_with(".json") && !expected.contains(&name) {
-            std::fs::remove_file(entry.path())
-                .with_context(|| format!("removing stale record {name}"))?;
+            std::fs::remove_file(&path).with_context(|| format!("removing stale record {name}"))?;
         }
     }
     Ok(())
@@ -156,6 +183,47 @@ mod tests {
 
         write_records(&root, &[record("yojana-1.json", b"v2")]).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"v2");
+    }
+
+    #[test]
+    fn write_records_creates_subproject_dir() {
+        let root = unique_dir();
+        let path = root
+            .join(".yojana")
+            .join("records")
+            .join("sutra")
+            .join("needs-designing-15.json");
+
+        write_records(&root, &[record("sutra/needs-designing-15.json", b"v1")]).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"v1");
+    }
+
+    #[test]
+    fn reconcile_handles_subproject_records() {
+        let root = unique_dir();
+        write_records(
+            &root,
+            &[
+                record("sutra/needs-designing-1.json", b"a"),
+                record("sutra/needs-designing-2.json", b"b"),
+            ],
+        )
+        .unwrap();
+
+        let expected: HashSet<String> = ["sutra/needs-designing-2.json".to_string()]
+            .into_iter()
+            .collect();
+        reconcile_records(&root, &expected).unwrap();
+
+        let sub = root.join(".yojana").join("records").join("sutra");
+        assert!(
+            !sub.join("needs-designing-1.json").exists(),
+            "stale subproject record kept"
+        );
+        assert!(
+            sub.join("needs-designing-2.json").exists(),
+            "live subproject record dropped"
+        );
     }
 
     #[test]
