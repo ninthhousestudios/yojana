@@ -1033,7 +1033,7 @@ impl Db {
                     )));
                 }
             } else {
-                state::validate_transition(&task.status, new_status)?;
+                state::validate_transition(task.status.parse()?, new_status.parse()?)?;
             }
             history.push(HistoryEntry {
                 ts: now,
