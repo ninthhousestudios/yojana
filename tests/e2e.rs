@@ -1,6 +1,7 @@
 use yojana::context;
 use yojana::db::{CreateTaskParams, Db, TaskQueryFilter, TaskUpdates};
 use yojana::graph;
+use yojana::state::TaskStatus;
 
 #[test]
 fn full_flow_v0() {
@@ -112,7 +113,7 @@ fn full_flow_v0() {
     db.update_task(
         &id_a,
         TaskUpdates {
-            status: Some("ready-for-agent".into()),
+            status: Some(TaskStatus::ReadyForAgent),
             ..Default::default()
         },
         "test",
@@ -121,7 +122,7 @@ fn full_flow_v0() {
     db.update_task(
         &id_a,
         TaskUpdates {
-            status: Some("in-progress".into()),
+            status: Some(TaskStatus::InProgress),
             ..Default::default()
         },
         "test",
@@ -130,7 +131,7 @@ fn full_flow_v0() {
     db.update_task(
         &id_a,
         TaskUpdates {
-            status: Some("done".into()),
+            status: Some(TaskStatus::Done),
             ..Default::default()
         },
         "test",
@@ -147,7 +148,7 @@ fn full_flow_v0() {
     let summary_b = context::summary(&task_b, &b_edges);
     assert_eq!(summary_b.human_id, "yojana/2");
     assert_eq!(summary_b.title, "Task B");
-    assert_eq!(summary_b.status, "needs-triage");
+    assert_eq!(summary_b.status, TaskStatus::NeedsTriage);
     assert_eq!(summary_b.edge_counts.get("depends_on_out"), Some(&1));
 
     // 8. Working context for C — shows B and A as neighbors (C depends_on B via edge)
@@ -198,7 +199,7 @@ fn full_flow_v0() {
     // 11. Query by status=done — only A
     let done_tasks = db
         .list_tasks(&TaskQueryFilter {
-            status: Some("done".into()),
+            status: Some(TaskStatus::Done),
             ..Default::default()
         })
         .unwrap();

@@ -32,7 +32,7 @@ fn line_of(task: &TaskRow) -> (SortKey, ManifestLine) {
         ManifestLine {
             id: format!("{}/{}", task.project_slug, task.sequence_number),
             title: task.title.clone(),
-            status: task.status.clone(),
+            status: task.status.to_string(),
             closed_at: task.completed_at,
         },
     )
@@ -61,6 +61,7 @@ pub fn serialize_manifest(tasks: &[TaskRow]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::TaskStatus;
     use uuid::Uuid;
 
     /// A minimal `TaskRow` for exercising `line_of` directly. Only the four
@@ -70,7 +71,7 @@ mod tests {
         slug: &str,
         seq: i64,
         title: &str,
-        status: &str,
+        status: TaskStatus,
         completed_at: Option<i64>,
     ) -> TaskRow {
         TaskRow {
@@ -81,7 +82,7 @@ mod tests {
             title: title.to_string(),
             description: String::new(),
             category: None,
-            status: status.to_string(),
+            status,
             slice_type: None,
             acceptance_criteria: "[]".to_string(),
             decisions: "[]".to_string(),
@@ -168,7 +169,13 @@ mod tests {
         // real TaskRow fields are read: the {slug}/{seq} id and the
         // completed_at -> closed_at remap. The other tests build ManifestLines
         // by hand and never exercise it.
-        let (key, mline) = line_of(&task_row("yojana", 42, "Ship it", "done", Some(999)));
+        let (key, mline) = line_of(&task_row(
+            "yojana",
+            42,
+            "Ship it",
+            TaskStatus::Done,
+            Some(999),
+        ));
         assert_eq!(key, ("yojana".to_string(), 42));
         let bytes = serialize_lines(vec![(key, mline)]);
         assert_eq!(
@@ -179,7 +186,7 @@ mod tests {
 
     #[test]
     fn line_of_open_task_maps_null_closed_at() {
-        let (key, mline) = line_of(&task_row("beads", 3, "WIP", "in-progress", None));
+        let (key, mline) = line_of(&task_row("beads", 3, "WIP", TaskStatus::InProgress, None));
         assert_eq!(key, ("beads".to_string(), 3));
         let bytes = serialize_lines(vec![(key, mline)]);
         assert_eq!(

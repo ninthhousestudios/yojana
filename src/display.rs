@@ -150,7 +150,7 @@ pub fn format_tasks_list(tasks: &[TaskRow], arcs: &HashMap<Uuid, ArcDisplayInfo>
         let mut row = vec![
             human_id.clone(),
             t.title.clone(),
-            t.status.clone(),
+            t.status.to_string(),
             category.to_string(),
         ];
         if show_arc {
@@ -477,6 +477,7 @@ fn render_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::TaskStatus;
 
     fn sample_project() -> ProjectRow {
         ProjectRow {
@@ -501,7 +502,7 @@ mod tests {
             title: "Do the thing".to_string(),
             description: "Build it well".to_string(),
             category: Some("enhancement".to_string()),
-            status: "in-progress".to_string(),
+            status: TaskStatus::InProgress,
             slice_type: Some("AFK".to_string()),
             acceptance_criteria:
                 r#"[{"text":"it works","done":true},{"text":"it's fast","done":false}]"#.to_string(),

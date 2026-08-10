@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::db::EdgeRow;
 use crate::error::YojanaError;
+use crate::state::TaskStatus;
 
 pub fn would_cycle(
     existing_edges: &[(Uuid, Uuid)],
@@ -54,18 +55,20 @@ fn dfs(
     false
 }
 
-pub fn is_ready(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, String)]) -> bool {
+pub fn is_ready(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, TaskStatus)]) -> bool {
     let my_deps: Vec<_> = deps_with_status
         .iter()
         .filter(|(src, _, _)| *src == task_id)
         .collect();
-    my_deps.iter().all(|(_, _, status)| status == "done")
+    my_deps
+        .iter()
+        .all(|(_, _, status)| *status == TaskStatus::Done)
 }
 
-pub fn blocked_by(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, String)]) -> Vec<Uuid> {
+pub fn blocked_by(task_id: Uuid, deps_with_status: &[(Uuid, Uuid, TaskStatus)]) -> Vec<Uuid> {
     deps_with_status
         .iter()
-        .filter(|(src, _, status)| *src == task_id && status != "done")
+        .filter(|(src, _, status)| *src == task_id && *status != TaskStatus::Done)
         .map(|(_, tgt, _)| *tgt)
         .collect()
 }
@@ -215,21 +218,24 @@ mod tests {
 
     #[test]
     fn ready_no_deps() {
-        let deps: Vec<(Uuid, Uuid, String)> = vec![];
+        let deps: Vec<(Uuid, Uuid, TaskStatus)> = vec![];
         assert!(is_ready(id(1), &deps));
     }
 
     #[test]
     fn ready_all_deps_done() {
-        let deps = vec![(id(1), id(2), "done".into()), (id(1), id(3), "done".into())];
+        let deps = vec![
+            (id(1), id(2), TaskStatus::Done),
+            (id(1), id(3), TaskStatus::Done),
+        ];
         assert!(is_ready(id(1), &deps));
     }
 
     #[test]
     fn not_ready_some_deps_pending() {
         let deps = vec![
-            (id(1), id(2), "done".into()),
-            (id(1), id(3), "in-progress".into()),
+            (id(1), id(2), TaskStatus::Done),
+            (id(1), id(3), TaskStatus::InProgress),
         ];
         assert!(!is_ready(id(1), &deps));
     }
@@ -237,9 +243,9 @@ mod tests {
     #[test]
     fn blocked_by_returns_incomplete() {
         let deps = vec![
-            (id(1), id(2), "done".into()),
-            (id(1), id(3), "in-progress".into()),
-            (id(1), id(4), "needs-triage".into()),
+            (id(1), id(2), TaskStatus::Done),
+            (id(1), id(3), TaskStatus::InProgress),
+            (id(1), id(4), TaskStatus::NeedsTriage),
         ];
         let blockers = blocked_by(id(1), &deps);
         assert_eq!(blockers.len(), 2);
@@ -249,7 +255,7 @@ mod tests {
 
     #[test]
     fn ready_ignores_other_tasks_deps() {
-        let deps = vec![(id(2), id(3), "in-progress".into())];
+        let deps = vec![(id(2), id(3), TaskStatus::InProgress)];
         assert!(is_ready(id(1), &deps));
     }
 }

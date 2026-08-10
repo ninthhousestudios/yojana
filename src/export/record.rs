@@ -81,8 +81,9 @@ pub fn serialize_record(env: &RecordEnvelope) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::db::TaskRow;
+    use crate::state::TaskStatus;
 
-    fn task_row(slug: &str, seq: i64, status: &str) -> TaskRow {
+    fn task_row(slug: &str, seq: i64, status: TaskStatus) -> TaskRow {
         TaskRow {
             id: Uuid::nil(),
             project_id: Uuid::nil(),
@@ -91,7 +92,7 @@ mod tests {
             title: "Ship it".to_string(),
             description: String::new(),
             category: None,
-            status: status.to_string(),
+            status,
             slice_type: None,
             acceptance_criteria: "[]".to_string(),
             decisions: "[]".to_string(),
@@ -122,7 +123,7 @@ mod tests {
         }
     }
 
-    fn envelope(status: &str, edges: Vec<RecordEdge>) -> RecordEnvelope {
+    fn envelope(status: TaskStatus, edges: Vec<RecordEdge>) -> RecordEnvelope {
         RecordEnvelope {
             task: TaskOutput::from(task_row("yojana", 42, status)),
             edges,
@@ -173,7 +174,7 @@ mod tests {
 
     #[test]
     fn record_is_newline_terminated() {
-        let bytes = serialize_record(&envelope("done", vec![]));
+        let bytes = serialize_record(&envelope(TaskStatus::Done, vec![]));
         assert_eq!(bytes.last(), Some(&b'\n'));
     }
 
@@ -190,7 +191,7 @@ mod tests {
                 .into_iter()
                 .collect();
         let edges = record_edges(&[edge(10, me, up, "depends_on")], &human);
-        let bytes = serialize_record(&envelope("done", edges));
+        let bytes = serialize_record(&envelope(TaskStatus::Done, edges));
         let got: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
         let expected = serde_json::json!({
@@ -235,7 +236,7 @@ mod tests {
     /// the Value-based golden cannot see.
     #[test]
     fn field_order_is_stable_with_edges_last() {
-        let bytes = serialize_record(&envelope("done", vec![]));
+        let bytes = serialize_record(&envelope(TaskStatus::Done, vec![]));
         let text = String::from_utf8(bytes).unwrap();
         let pos = |k: &str| text.find(&format!("\"{k}\"")).unwrap();
         assert!(pos("id") < pos("status"));
@@ -245,7 +246,7 @@ mod tests {
 
     #[test]
     fn deterministic_across_runs() {
-        let build = || serialize_record(&envelope("wontfix", vec![]));
+        let build = || serialize_record(&envelope(TaskStatus::WontFix, vec![]));
         assert_eq!(build(), build());
     }
 }

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::db::{Db, TERMINAL_STATUSES, TaskQueryFilter, TaskRow};
+use crate::db::{Db, TaskQueryFilter, TaskRow};
 use crate::tools::task::TaskOutput;
 use writer::RecordFile;
 
@@ -77,10 +77,7 @@ fn collect_record_files(db: &Db, tasks: Vec<TaskRow>) -> anyhow::Result<Vec<Reco
         .collect();
 
     let mut out = Vec::new();
-    for row in tasks
-        .into_iter()
-        .filter(|t| TERMINAL_STATUSES.contains(&t.status.as_str()))
-    {
+    for row in tasks.into_iter().filter(|t| t.status.is_terminal()) {
         let task_id = row.id;
         let filename = record::record_filename(&row.project_slug, row.sequence_number);
         let edges = db.list_edges_for_task(&task_id)?;
@@ -125,6 +122,7 @@ mod tests {
     use super::*;
     use crate::db::{CreateTaskParams, TaskUpdates};
     use crate::export::test_support::unique_dir;
+    use crate::state::TaskStatus;
 
     fn make_task(db: &Db, project_id: Uuid, project_slug: &str, title: &str) -> TaskRow {
         db.create_task(
@@ -155,11 +153,11 @@ mod tests {
 
     /// Jump a task straight to `status`, bypassing transition validation — the
     /// records layer only cares about terminal membership, not how it got there.
-    fn set_status(db: &Db, id: &Uuid, status: &str) {
+    fn set_status(db: &Db, id: &Uuid, status: TaskStatus) {
         db.update_task(
             &id.to_string(),
             TaskUpdates {
-                status: Some(status.to_string()),
+                status: Some(status),
                 force_status: true,
                 ..Default::default()
             },
@@ -243,9 +241,9 @@ mod tests {
         let wontfix = make_task(&db, pid, &slug, "wontfix one");
         let wip = make_task(&db, pid, &slug, "in progress");
         make_task(&db, pid, &slug, "still queued"); // ready-for-agent/needs-triage
-        set_status(&db, &done.id, "done");
-        set_status(&db, &wontfix.id, "wontfix");
-        set_status(&db, &wip.id, "in-progress");
+        set_status(&db, &done.id, TaskStatus::Done);
+        set_status(&db, &wontfix.id, TaskStatus::WontFix);
+        set_status(&db, &wip.id, TaskStatus::InProgress);
 
         assert_eq!(
             record_names(&db),
@@ -259,7 +257,7 @@ mod tests {
     fn record_updates_after_post_close_comment() {
         let (db, pid, slug) = export_db();
         let t = make_task(&db, pid, &slug, "review me");
-        set_status(&db, &t.id, "done");
+        set_status(&db, &t.id, TaskStatus::Done);
 
         let before = collect_record_files(&db, subtree(&db)).unwrap();
         db.append_conversation_message(&t.id, "LGTM, shipped", Some("josh"))
@@ -284,8 +282,8 @@ mod tests {
         let (db, pid, slug) = export_db();
         let reopened = make_task(&db, pid, &slug, "will reopen");
         let stays = make_task(&db, pid, &slug, "stays done");
-        set_status(&db, &reopened.id, "done");
-        set_status(&db, &stays.id, "done");
+        set_status(&db, &reopened.id, TaskStatus::Done);
+        set_status(&db, &stays.id, TaskStatus::Done);
         let root = unique_dir();
 
         // Run 1: both terminal -> both records on disk.
@@ -298,7 +296,7 @@ mod tests {
         assert!(records_dir.join("root-2.json").exists());
 
         // Run 2: reopen root-1 -> only root-2 remains terminal.
-        set_status(&db, &reopened.id, "needs-triage");
+        set_status(&db, &reopened.id, TaskStatus::NeedsTriage);
         let run2 = collect_record_files(&db, subtree(&db)).unwrap();
         let expected2: HashSet<String> = run2.iter().map(|r| r.filename.clone()).collect();
         writer::write_records(&root, &run2).unwrap();
@@ -320,8 +318,8 @@ mod tests {
         let (db, pid, slug) = export_db();
         let a = make_task(&db, pid, &slug, "task a");
         let b = make_task(&db, pid, &slug, "task b");
-        set_status(&db, &a.id, "done");
-        set_status(&db, &b.id, "done");
+        set_status(&db, &a.id, TaskStatus::Done);
+        set_status(&db, &b.id, TaskStatus::Done);
         db.create_edge(a.id, b.id, "depends_on", None).unwrap();
         db.append_conversation_message(&a.id, "note", None).unwrap();
 

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::acceptance;
 use crate::context_ref::{ContextRef, RefType};
 use crate::db::{EdgeRow, HistoryEntry, TaskRow};
+use crate::state::TaskStatus;
 
 pub const VALID_SHAPES: &[&str] = &["summary", "working", "planning", "agent", "review"];
 
@@ -21,7 +22,7 @@ pub struct SummaryBundle {
     pub shape: &'static str,
     pub human_id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub slice_type: Option<String>,
     pub category: Option<String>,
     pub edge_counts: HashMap<String, usize>,
@@ -232,7 +233,7 @@ pub struct ReviewBundle {
     pub shape: &'static str,
     pub human_id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub description: String,
     pub acceptance_criteria: Vec<serde_json::Value>,
     pub decisions: Vec<serde_json::Value>,
@@ -312,7 +313,7 @@ pub fn arc_summary(
             let total = phase_tasks.len();
             let done = phase_tasks
                 .iter()
-                .filter(|t| t.status == "done" || t.status == "wontfix")
+                .filter(|t| t.status.is_terminal())
                 .count();
 
             serde_json::json!({
@@ -395,7 +396,7 @@ mod tests {
             title: format!("Task {id}"),
             description: String::new(),
             category: Some("enhancement".into()),
-            status: "ready-for-agent".into(),
+            status: TaskStatus::ReadyForAgent,
             slice_type: Some("AFK".into()),
             acceptance_criteria: r#"[{"text":"it works"}]"#.into(),
             decisions: r#"[{"text":"use X"}]"#.into(),
@@ -439,7 +440,7 @@ mod tests {
         assert_eq!(bundle.shape, "summary");
         assert_eq!(bundle.human_id, "proj/1");
         assert_eq!(bundle.title, "Task 1");
-        assert_eq!(bundle.status, "ready-for-agent");
+        assert_eq!(bundle.status, TaskStatus::ReadyForAgent);
         assert_eq!(bundle.slice_type.as_deref(), Some("AFK"));
         assert_eq!(bundle.category.as_deref(), Some("enhancement"));
         assert_eq!(bundle.edge_counts.get("depends_on_out"), Some(&2));
@@ -618,7 +619,7 @@ mod tests {
         arc_task.arc_phase = Some("implement".into());
 
         let mut external_task = make_task(2, "proj", 2);
-        external_task.status = "in-progress".into();
+        external_task.status = TaskStatus::InProgress;
 
         let edges = vec![make_edge(1, 2, "depends_on")];
 
@@ -637,7 +638,7 @@ mod tests {
         ]));
 
         let mut external_task = make_task(2, "proj", 2);
-        external_task.status = "done".into();
+        external_task.status = TaskStatus::Done;
 
         let edges = vec![make_edge(1, 2, "depends_on")];
         let blockers = find_cross_arc_blockers(&[arc_task], &[external_task], &edges);
@@ -654,15 +655,15 @@ mod tests {
 
         let mut t1 = make_task(1, "proj", 1);
         t1.arc_phase = Some("design".into());
-        t1.status = "done".into();
+        t1.status = TaskStatus::Done;
 
         let mut t2 = make_task(2, "proj", 2);
         t2.arc_phase = Some("implement".into());
-        t2.status = "in-progress".into();
+        t2.status = TaskStatus::InProgress;
 
         let mut t3 = make_task(3, "proj", 3);
         t3.arc_phase = Some("implement".into());
-        t3.status = "done".into();
+        t3.status = TaskStatus::Done;
 
         let bundle = arc_summary("proj/~1", "Test Arc", "active", &phases, &[t1, t2, t3], &[]);
         assert_eq!(bundle.shape, "arc_summary");

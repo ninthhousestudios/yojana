@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::db::{Db, TaskQueryFilter, TaskRow};
 use crate::error::YojanaError;
 use crate::graph;
+use crate::state::TaskStatus;
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -15,7 +16,7 @@ pub struct QueryArgs {
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
@@ -38,7 +39,7 @@ pub struct QueryArgs {
 pub struct QueryResultItem {
     pub human_id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub category: Option<String>,
     pub slice_type: Option<String>,
     pub ready: bool,
@@ -61,13 +62,13 @@ fn resolve_project_ids(db: &Db, project: &str) -> Result<Vec<Uuid>, YojanaError>
 
 fn enrich(
     tasks: Vec<TaskRow>,
-    deps_with_status: &[(Uuid, Uuid, String)],
+    deps_with_status: &[(Uuid, Uuid, TaskStatus)],
     blocker_human_ids: &HashMap<Uuid, String>,
 ) -> Vec<QueryResultItem> {
     tasks
         .into_iter()
         .map(|t| {
-            let ready = is_ready_status(&t.status) && graph::is_ready(t.id, deps_with_status);
+            let ready = is_ready_status(t.status) && graph::is_ready(t.id, deps_with_status);
             let blockers = graph::blocked_by(t.id, deps_with_status);
             let blocked = !blockers.is_empty();
             QueryResultItem {
@@ -94,8 +95,11 @@ fn enrich(
         .collect()
 }
 
-fn is_ready_status(status: &str) -> bool {
-    status == "ready-for-agent" || status == "ready-for-human"
+fn is_ready_status(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::ReadyForAgent | TaskStatus::ReadyForHuman
+    )
 }
 
 pub fn handle(db: &Db, args: QueryArgs) -> Result<serde_json::Value, YojanaError> {

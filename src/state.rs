@@ -188,11 +188,3 @@ mod tests {
         }
     }
 }
-
-// --- Compatibility shims (remove when db.rs adopts TaskStatus in structs) ---
-
-/// Thin wrapper around `FromStr` — allows db.rs to keep calling `state::valid_status(&str)`
-/// until its structs adopt `TaskStatus` directly.
-pub fn valid_status(s: &str) -> bool {
-    s.parse::<TaskStatus>().is_ok()
-}

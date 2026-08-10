@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::db::{ArcRow, Db, TaskQueryFilter, TaskRow};
 use crate::error::YojanaError;
 use crate::graph;
+use crate::state::TaskStatus;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadyArgs {
@@ -18,7 +19,7 @@ pub struct ReadyArgs {
 pub struct ReadyItem {
     pub human_id: String,
     pub title: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub category: Option<String>,
     pub slice_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,10 +68,10 @@ pub fn handle(db: &Db, args: ReadyArgs) -> Result<serde_json::Value, YojanaError
     let mut arc_cache: HashMap<Uuid, ArcRow> = HashMap::new();
     let mut ready_tasks = Vec::new();
 
-    for status in &["ready-for-agent", "ready-for-human"] {
+    for status in [TaskStatus::ReadyForAgent, TaskStatus::ReadyForHuman] {
         let filter = TaskQueryFilter {
             project_ids: project_ids.clone(),
-            status: Some((*status).to_string()),
+            status: Some(status),
             ..Default::default()
         };
         let tasks = db.list_tasks(&filter)?;

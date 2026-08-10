@@ -1,11 +1,13 @@
 use parking_lot::Mutex;
 use rusqlite::Connection;
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::YojanaError;
 use crate::state;
+use crate::state::TaskStatus;
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -89,6 +91,24 @@ enum ArcIdentifier {
     SlugSeq(String, i64),
 }
 
+// --- TaskStatus SQLite boundary (ToSql/FromSql) ---
+// Defined here because rusqlite is confined to db.rs and error.rs.
+
+impl ToSql for TaskStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(self.as_str()))
+    }
+}
+
+impl FromSql for TaskStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        value
+            .as_str()?
+            .parse::<TaskStatus>()
+            .map_err(|e| FromSqlError::Other(Box::new(e)))
+    }
+}
+
 // --- Task types ---
 
 #[derive(Debug)]
@@ -100,7 +120,7 @@ pub struct TaskRow {
     pub title: String,
     pub description: String,
     pub category: Option<String>,
-    pub status: String,
+    pub status: TaskStatus,
     pub slice_type: Option<String>,
     pub acceptance_criteria: String,
     pub decisions: String,
@@ -125,7 +145,7 @@ pub struct CreateTaskParams {
     pub title: String,
     pub description: String,
     pub category: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     pub slice_type: Option<String>,
     pub acceptance_criteria: String,
     pub decisions: String,
@@ -145,7 +165,7 @@ pub struct TaskUpdates {
     pub title: Option<String>,
     pub description: Option<String>,
     pub category: Option<Option<String>>,
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     /// Skip state-machine validation for status changes (CLI override).
     pub force_status: bool,
     pub slice_type: Option<Option<String>>,
@@ -172,7 +192,7 @@ pub const DEFAULT_PAGE_LIMIT: i64 = 100;
 #[derive(Debug, Default)]
 pub struct TaskQueryFilter {
     pub project_ids: Option<Vec<Uuid>>,
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     pub category: Option<String>,
     pub slice_type: Option<String>,
     pub tag: Option<String>,
@@ -184,9 +204,6 @@ pub struct TaskQueryFilter {
     pub include_terminal_after: Option<i64>,
     pub arc_id: Option<Uuid>,
 }
-
-/// Statuses that count as "terminal" for default-hide filtering.
-pub const TERMINAL_STATUSES: &[&str] = &["done", "wontfix"];
 
 // --- Project statuses ---
 
@@ -953,12 +970,7 @@ impl Db {
             actor: Some(actor.to_string()),
         }])?;
 
-        let status = params.status.as_deref().unwrap_or("needs-triage");
-        if !state::valid_status(status) {
-            return Err(YojanaError::InvalidInput(format!(
-                "unknown status '{status}'"
-            )));
-        }
+        let status = params.status.unwrap_or(TaskStatus::NeedsTriage);
 
         conn.execute(
             "INSERT INTO tasks (\
@@ -1023,17 +1035,11 @@ impl Db {
         let mut history: Vec<HistoryEntry> = serde_json::from_str(&task.history)?;
 
         let mut new_completed_at = task.completed_at;
-        if let Some(ref new_status) = updates.status
-            && new_status != &task.status
+        if let Some(new_status) = updates.status
+            && new_status != task.status
         {
-            if updates.force_status {
-                if !state::valid_status(new_status) {
-                    return Err(YojanaError::InvalidInput(format!(
-                        "unknown status '{new_status}'"
-                    )));
-                }
-            } else {
-                state::validate_transition(task.status.parse()?, new_status.parse()?)?;
+            if !updates.force_status {
+                state::validate_transition(task.status, new_status)?;
             }
             history.push(HistoryEntry {
                 ts: now,
@@ -1041,9 +1047,9 @@ impl Db {
                 payload: serde_json::json!({"from": task.status, "to": new_status}),
                 actor: Some(actor.to_string()),
             });
-            if TERMINAL_STATUSES.contains(&new_status.as_str()) {
+            if new_status.is_terminal() {
                 new_completed_at = Some(now);
-            } else if TERMINAL_STATUSES.contains(&task.status.as_str()) {
+            } else if task.status.is_terminal() {
                 new_completed_at = None;
             }
         }
@@ -1064,7 +1070,7 @@ impl Db {
             None => task.category.as_deref(),
             Some(inner) => inner.as_deref(),
         };
-        let new_status = updates.status.as_deref().unwrap_or(&task.status);
+        let new_status = updates.status.unwrap_or(task.status);
         let new_slice: Option<&str> = match &updates.slice_type {
             None => task.slice_type.as_deref(),
             Some(inner) => inner.as_deref(),
@@ -1519,7 +1525,7 @@ impl Db {
             _ => return Ok(false),
         };
 
-        if !TERMINAL_STATUSES.contains(&task.status.as_str()) {
+        if !task.status.is_terminal() {
             return Ok(false);
         }
 
@@ -1567,9 +1573,7 @@ impl Db {
                 return Ok(false);
             }
 
-            sibling_tasks
-                .iter()
-                .all(|t| TERMINAL_STATUSES.contains(&t.status.as_str()))
+            sibling_tasks.iter().all(|t| t.status.is_terminal())
         };
         if !all_terminal {
             return Ok(false);
@@ -1648,8 +1652,8 @@ impl Db {
                 conditions.push(format!("t.project_id IN ({})", placeholders.join(", ")));
             }
         }
-        if let Some(ref status) = filter.status {
-            params.push(Box::new(status.clone()));
+        if let Some(status) = filter.status {
+            params.push(Box::new(status.as_str().to_owned()));
             conditions.push(format!("t.status = ?{}", params.len()));
         }
         if let Some(ref category) = filter.category {
@@ -1672,9 +1676,10 @@ impl Db {
             conditions.push(format!("t.arc_id = ?{}", params.len()));
         }
         if let Some(cutoff) = filter.include_terminal_after {
-            let terminal_list = TERMINAL_STATUSES
+            let terminal_list = TaskStatus::ALL
                 .iter()
-                .map(|s| format!("'{s}'"))
+                .filter(|s| s.is_terminal())
+                .map(|s| format!("'{}'", s.as_str()))
                 .collect::<Vec<_>>()
                 .join(", ");
             params.push(Box::new(cutoff));
@@ -1708,7 +1713,9 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn list_depends_on_with_status(&self) -> Result<Vec<(Uuid, Uuid, String)>, YojanaError> {
+    pub fn list_depends_on_with_status(
+        &self,
+    ) -> Result<Vec<(Uuid, Uuid, TaskStatus)>, YojanaError> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT e.source_task_id, e.target_task_id, t.status \
@@ -1719,7 +1726,7 @@ impl Db {
             .query_map([], |row| {
                 let src = uuid_from_blob(row, "source_task_id")?;
                 let tgt = uuid_from_blob(row, "target_task_id")?;
-                let status: String = row.get("status")?;
+                let status: TaskStatus = row.get("status")?;
                 Ok((src, tgt, status))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2158,7 +2165,7 @@ mod tests {
         assert_eq!(t1.sequence_number, 1);
         assert_eq!(t2.sequence_number, 2);
         assert_eq!(t3.sequence_number, 3);
-        assert_eq!(t1.status, "needs-triage");
+        assert_eq!(t1.status, TaskStatus::NeedsTriage);
         assert_eq!(t1.project_slug, "proj");
     }
 
@@ -2177,7 +2184,7 @@ mod tests {
                     title: "With status".into(),
                     description: String::new(),
                     category: None,
-                    status: Some("ready-for-agent".into()),
+                    status: Some(TaskStatus::ReadyForAgent),
                     slice_type: None,
                     acceptance_criteria: "[]".into(),
                     decisions: "[]".into(),
@@ -2194,36 +2201,10 @@ mod tests {
                 "test",
             )
             .unwrap();
-        assert_eq!(t.status, "ready-for-agent");
+        assert_eq!(t.status, TaskStatus::ReadyForAgent);
 
         let t2 = create_test_task(&db, "proj", "No status");
-        assert_eq!(t2.status, "needs-triage");
-
-        let err = db.create_task(
-            CreateTaskParams {
-                project_id: p.id,
-                project_slug: p.slug,
-                title: "Bad status".into(),
-                description: String::new(),
-                category: None,
-                status: Some("bogus".into()),
-                slice_type: None,
-                acceptance_criteria: "[]".into(),
-                decisions: "[]".into(),
-                context_refs: "[]".into(),
-                files: "[]".into(),
-                tags: "[]".into(),
-                implementation_plan: None,
-                execution_record: None,
-                reproduction: None,
-                root_cause: None,
-                arc_id: None,
-                arc_phase: None,
-            },
-            "test",
-        );
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("unknown status"));
+        assert_eq!(t2.status, TaskStatus::NeedsTriage);
     }
 
     #[test]
@@ -2288,7 +2269,7 @@ mod tests {
 
         assert_eq!(updated.title, "Changed");
         assert_eq!(updated.category.as_deref(), Some("bug"));
-        assert_eq!(updated.status, "needs-triage"); // unchanged
+        assert_eq!(updated.status, TaskStatus::NeedsTriage); // unchanged
     }
 
     #[test]
@@ -2384,19 +2365,19 @@ mod tests {
         db.create_project("proj", "Project", "", None, "test")
             .unwrap();
         let t = create_test_task(&db, "proj", "Task");
-        assert_eq!(t.status, "needs-triage");
+        assert_eq!(t.status, TaskStatus::NeedsTriage);
 
         let updated = db
             .update_task(
                 &t.id.to_string(),
                 TaskUpdates {
-                    status: Some("ready-for-agent".into()),
+                    status: Some(TaskStatus::ReadyForAgent),
                     ..Default::default()
                 },
                 "test",
             )
             .unwrap();
-        assert_eq!(updated.status, "ready-for-agent");
+        assert_eq!(updated.status, TaskStatus::ReadyForAgent);
 
         let history: Vec<HistoryEntry> = serde_json::from_str(&updated.history).unwrap();
         let status_entries: Vec<_> = history
@@ -2419,7 +2400,7 @@ mod tests {
             .update_task(
                 &t.id.to_string(),
                 TaskUpdates {
-                    status: Some("done".into()),
+                    status: Some(TaskStatus::Done),
                     ..Default::default()
                 },
                 "test",
@@ -2439,7 +2420,7 @@ mod tests {
             .update_task(
                 &t.id.to_string(),
                 TaskUpdates {
-                    status: Some("needs-triage".into()),
+                    status: Some(TaskStatus::NeedsTriage),
                     ..Default::default()
                 },
                 "test",
@@ -2471,7 +2452,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(updated.title, "New title");
-        assert_eq!(updated.status, "needs-triage");
+        assert_eq!(updated.status, TaskStatus::NeedsTriage);
     }
 
     #[test]
@@ -2485,7 +2466,7 @@ mod tests {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("ready-for-agent".into()),
+                status: Some(TaskStatus::ReadyForAgent),
                 ..Default::default()
             },
             "test",
@@ -2494,7 +2475,7 @@ mod tests {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("in-progress".into()),
+                status: Some(TaskStatus::InProgress),
                 ..Default::default()
             },
             "test",
@@ -2503,7 +2484,7 @@ mod tests {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("done".into()),
+                status: Some(TaskStatus::Done),
                 ..Default::default()
             },
             "test",
@@ -2514,7 +2495,7 @@ mod tests {
             .update_task(
                 &id,
                 TaskUpdates {
-                    status: Some("in-progress".into()),
+                    status: Some(TaskStatus::InProgress),
                     ..Default::default()
                 },
                 "test",
@@ -2526,13 +2507,13 @@ mod tests {
             .update_task(
                 &id,
                 TaskUpdates {
-                    status: Some("needs-triage".into()),
+                    status: Some(TaskStatus::NeedsTriage),
                     ..Default::default()
                 },
                 "test",
             )
             .unwrap();
-        assert_eq!(reopened.status, "needs-triage");
+        assert_eq!(reopened.status, TaskStatus::NeedsTriage);
     }
 
     // --- Slice 04: edge CRUD ---
@@ -2712,12 +2693,12 @@ mod tests {
 
     // --- Slice 05: query + ready detection ---
 
-    fn advance_to(db: &Db, id: &str, statuses: &[&str]) {
-        for s in statuses {
+    fn advance_to(db: &Db, id: &str, statuses: &[TaskStatus]) {
+        for &s in statuses {
             db.update_task(
                 id,
                 TaskUpdates {
-                    status: Some((*s).into()),
+                    status: Some(s),
                     ..Default::default()
                 },
                 "test",
@@ -2746,11 +2727,11 @@ mod tests {
         let t1 = create_test_task(&db, "proj", "A");
         create_test_task(&db, "proj", "B");
 
-        advance_to(&db, &t1.id.to_string(), &["ready-for-agent"]);
+        advance_to(&db, &t1.id.to_string(), &[TaskStatus::ReadyForAgent]);
 
         let tasks = db
             .list_tasks(&TaskQueryFilter {
-                status: Some("ready-for-agent".into()),
+                status: Some(TaskStatus::ReadyForAgent),
                 ..Default::default()
             })
             .unwrap();
@@ -2847,7 +2828,7 @@ mod tests {
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].0, t1.id);
         assert_eq!(deps[0].1, t2.id);
-        assert_eq!(deps[0].2, "needs-triage");
+        assert_eq!(deps[0].2, TaskStatus::NeedsTriage);
     }
 
     #[test]
@@ -2857,7 +2838,7 @@ mod tests {
             .unwrap();
         let t = create_test_task(&db, "proj", "A");
         let id = t.id.to_string();
-        advance_to(&db, &id, &["ready-for-agent"]);
+        advance_to(&db, &id, &[TaskStatus::ReadyForAgent]);
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(t.id, &deps));
@@ -2876,8 +2857,16 @@ mod tests {
 
         db.create_edge(t1.id, t2.id, "depends_on", None).unwrap();
 
-        advance_to(&db, &id1, &["ready-for-agent"]);
-        advance_to(&db, &id2, &["ready-for-agent", "in-progress", "done"]);
+        advance_to(&db, &id1, &[TaskStatus::ReadyForAgent]);
+        advance_to(
+            &db,
+            &id2,
+            &[
+                TaskStatus::ReadyForAgent,
+                TaskStatus::InProgress,
+                TaskStatus::Done,
+            ],
+        );
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(t1.id, &deps));
@@ -2913,12 +2902,28 @@ mod tests {
 
         let mid1_id = mid1.id.to_string();
         let mid2_id = mid2.id.to_string();
-        advance_to(&db, &mid1_id, &["ready-for-agent", "in-progress", "done"]);
+        advance_to(
+            &db,
+            &mid1_id,
+            &[
+                TaskStatus::ReadyForAgent,
+                TaskStatus::InProgress,
+                TaskStatus::Done,
+            ],
+        );
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(!crate::graph::is_ready(leaf.id, &deps));
 
-        advance_to(&db, &mid2_id, &["ready-for-agent", "in-progress", "done"]);
+        advance_to(
+            &db,
+            &mid2_id,
+            &[
+                TaskStatus::ReadyForAgent,
+                TaskStatus::InProgress,
+                TaskStatus::Done,
+            ],
+        );
 
         let deps = db.list_depends_on_with_status().unwrap();
         assert!(crate::graph::is_ready(leaf.id, &deps));
@@ -3418,9 +3423,13 @@ mod tests {
             .unwrap();
         let t = create_test_task(&db, "proj", "Task");
         let id = t.id.to_string();
-        advance_to(&db, &id, &["ready-for-agent", "in-progress"]);
+        advance_to(
+            &db,
+            &id,
+            &[TaskStatus::ReadyForAgent, TaskStatus::InProgress],
+        );
         let fetched = db.get_task(&id).unwrap().unwrap();
-        assert_eq!(fetched.status, "in-progress");
+        assert_eq!(fetched.status, TaskStatus::InProgress);
     }
 
     #[test]
@@ -4100,7 +4109,7 @@ mod tests {
         advance_to(
             &db,
             &format!("proj/{}", t1.sequence_number),
-            &["in-progress", "done"],
+            &[TaskStatus::InProgress, TaskStatus::Done],
         );
 
         let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
@@ -4118,7 +4127,11 @@ mod tests {
         let (pid, arc_id) = setup_arc_with_auto_gate(&db);
         let t1 = create_arc_task(&db, pid, arc_id, "design");
 
-        advance_to(&db, &format!("proj/{}", t1.sequence_number), &["wontfix"]);
+        advance_to(
+            &db,
+            &format!("proj/{}", t1.sequence_number),
+            &[TaskStatus::WontFix],
+        );
 
         let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
         assert!(result);
@@ -4138,7 +4151,7 @@ mod tests {
         advance_to(
             &db,
             &format!("proj/{}", t1.sequence_number),
-            &["in-progress", "done"],
+            &[TaskStatus::InProgress, TaskStatus::Done],
         );
 
         let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
@@ -4178,7 +4191,7 @@ mod tests {
         advance_to(
             &db,
             &format!("proj/{}", t1.sequence_number),
-            &["in-progress", "done"],
+            &[TaskStatus::InProgress, TaskStatus::Done],
         );
 
         let result = db.try_auto_advance_phase(&t1.id, "test").unwrap();
@@ -4233,7 +4246,7 @@ mod tests {
         advance_to(
             &db,
             &format!("proj/{}", t1.sequence_number),
-            &["in-progress", "done"],
+            &[TaskStatus::InProgress, TaskStatus::Done],
         );
 
         db.try_auto_advance_phase(&t1.id, "test").unwrap();

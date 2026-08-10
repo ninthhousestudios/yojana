@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
+use yojana::state::TaskStatus;
 
 use yojana::config::Config;
 use yojana::db::Db;
@@ -53,7 +54,7 @@ fn todo_creates_needs_triage_task_and_prints_slug() {
     let db = seed(&db_path);
     let task = db.get_task("demo/1").unwrap().unwrap();
     assert_eq!(task.title, "first todo");
-    assert_eq!(task.status, "needs-triage");
+    assert_eq!(task.status, TaskStatus::NeedsTriage);
     assert_eq!(task.description, "");
 
     let _ = std::fs::remove_file(&db_path);
@@ -180,7 +181,7 @@ fn create_in_progress_task(db: &Db, project_slug: &str, title: &str) -> String {
                 title: title.to_string(),
                 description: String::new(),
                 category: None,
-                status: Some("in-progress".to_string()),
+                status: Some(TaskStatus::InProgress),
                 slice_type: None,
                 acceptance_criteria: "[]".to_string(),
                 decisions: "[]".to_string(),
@@ -224,7 +225,7 @@ fn done_with_message_writes_tagged_comment() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "done");
+    assert_eq!(task.status, TaskStatus::Done);
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert_eq!(msgs.len(), 1);
     let text = msgs[0]["text"].as_str().unwrap();
@@ -252,7 +253,7 @@ fn done_without_message_no_comment() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "done");
+    assert_eq!(task.status, TaskStatus::Done);
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert!(msgs.is_empty());
 
@@ -283,7 +284,7 @@ fn wontfix_misfiled() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "wontfix");
+    assert_eq!(task.status, TaskStatus::WontFix);
     assert!(task.completed_at.is_some());
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert_eq!(msgs.len(), 1);
@@ -320,7 +321,7 @@ fn wontfix_descoped_with_note() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "wontfix");
+    assert_eq!(task.status, TaskStatus::WontFix);
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert_eq!(
         msgs[0]["text"].as_str().unwrap(),
@@ -359,7 +360,7 @@ fn wontfix_superseded_creates_edge() {
 
     let db = seed(&db_path);
     let old_task = db.get_task(&old_id).unwrap().unwrap();
-    assert_eq!(old_task.status, "wontfix");
+    assert_eq!(old_task.status, TaskStatus::WontFix);
 
     let msgs = db.get_conversation_messages(&old_task.id).unwrap();
     let text = msgs[0]["text"].as_str().unwrap();
@@ -443,7 +444,7 @@ fn wontfix_from_ready_for_agent_uses_force() {
                     title: "agent task".to_string(),
                     description: String::new(),
                     category: None,
-                    status: Some("ready-for-agent".to_string()),
+                    status: Some(TaskStatus::ReadyForAgent),
                     slice_type: None,
                     acceptance_criteria: "[]".to_string(),
                     decisions: "[]".to_string(),
@@ -476,7 +477,7 @@ fn wontfix_from_ready_for_agent_uses_force() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "wontfix");
+    assert_eq!(task.status, TaskStatus::WontFix);
 
     let _ = std::fs::remove_file(&db_path);
 }
@@ -500,7 +501,8 @@ fn wontfix_superseded_bad_target_leaves_task_unchanged() {
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
     assert_eq!(
-        task.status, "in-progress",
+        task.status,
+        TaskStatus::InProgress,
         "task should not have been mutated"
     );
     let msgs = db.get_conversation_messages(&task.id).unwrap();
@@ -524,7 +526,7 @@ fn done_bug_task_no_message_non_tty_skips_prompt() {
                     title: "a bug".to_string(),
                     description: String::new(),
                     category: Some("bug".to_string()),
-                    status: Some("in-progress".to_string()),
+                    status: Some(TaskStatus::InProgress),
                     slice_type: None,
                     acceptance_criteria: "[]".to_string(),
                     decisions: "[]".to_string(),
@@ -558,7 +560,7 @@ fn done_bug_task_no_message_non_tty_skips_prompt() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "done");
+    assert_eq!(task.status, TaskStatus::Done);
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert!(
         msgs.is_empty(),
@@ -583,7 +585,7 @@ fn done_bug_task_with_message_writes_comment() {
                     title: "another bug".to_string(),
                     description: String::new(),
                     category: Some("bug".to_string()),
-                    status: Some("in-progress".to_string()),
+                    status: Some(TaskStatus::InProgress),
                     slice_type: None,
                     acceptance_criteria: "[]".to_string(),
                     decisions: "[]".to_string(),
@@ -612,7 +614,7 @@ fn done_bug_task_with_message_writes_comment() {
 
     let db = seed(&db_path);
     let task = db.get_task(&human_id).unwrap().unwrap();
-    assert_eq!(task.status, "done");
+    assert_eq!(task.status, TaskStatus::Done);
     let msgs = db.get_conversation_messages(&task.id).unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(

@@ -6,6 +6,7 @@ use crate::acceptance::{self, AcceptanceCriterionInput};
 use crate::context_ref::{ContextRef, RefType};
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
+pub use crate::state::TaskStatus;
 
 fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
@@ -55,34 +56,6 @@ impl AsRef<str> for SliceType {
         match self {
             Self::Afk => "AFK",
             Self::Hitl => "HITL",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum TaskStatus {
-    NeedsTriage,
-    NeedsInfo,
-    ReadyForAgent,
-    ReadyForHuman,
-    InProgress,
-    NeedsReview,
-    Done,
-    Wontfix,
-}
-
-impl AsRef<str> for TaskStatus {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::NeedsTriage => "needs-triage",
-            Self::NeedsInfo => "needs-info",
-            Self::ReadyForAgent => "ready-for-agent",
-            Self::ReadyForHuman => "ready-for-human",
-            Self::InProgress => "in-progress",
-            Self::NeedsReview => "needs-review",
-            Self::Done => "done",
-            Self::Wontfix => "wontfix",
         }
     }
 }
@@ -148,7 +121,7 @@ pub struct TaskOutput {
     pub title: String,
     pub description: String,
     pub category: Option<String>,
-    pub status: String,
+    pub status: TaskStatus,
     pub slice_type: Option<String>,
     pub acceptance_criteria: Vec<serde_json::Value>,
     pub decisions: Vec<serde_json::Value>,
@@ -287,7 +260,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 title: title.to_string(),
                 description: args.description.unwrap_or_default(),
                 category: args.category.flatten().map(|c| c.as_ref().to_string()),
-                status: args.status.map(|s| s.as_ref().to_string()),
+                status: args.status,
                 slice_type: args.slice_type.flatten().map(|s| s.as_ref().to_string()),
                 acceptance_criteria: to_json(&acceptance::normalize(
                     args.acceptance_criteria.unwrap_or_default(),
@@ -384,7 +357,7 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
                 title: args.title,
                 description: args.description,
                 category: args.category.map(|o| o.map(|c| c.as_ref().to_string())),
-                status: args.status.map(|s| s.as_ref().to_string()),
+                status: args.status,
                 force_status: false,
                 slice_type: args.slice_type.map(|o| o.map(|s| s.as_ref().to_string())),
                 acceptance_criteria: args
@@ -449,12 +422,13 @@ mod tests {
         );
         // Guards the yojana/32 schema diet: the hot-path schema reloads several
         // times per long session, so keep it lean. Budget raised from 450→550
-        // in yojana/34 to accommodate the typed ContextRef item schema, and
-        // 550→620 in yojana/42 for the typed acceptance_criteria item schema
-        // (the untyped `items: true` was what let two storage shapes in).
+        // in yojana/34 to accommodate the typed ContextRef item schema,
+        // 550→620 in yojana/42 for the typed acceptance_criteria item schema,
+        // and 620→700 in yojana/43 when TaskStatus moved to state.rs with
+        // additional derives (Hash, Serialize) that schemars reflects.
         assert!(
-            est_tokens <= 620,
-            "TaskArgs schema grew to ~{est_tokens} tokens (>620); did a field description sneak back in?"
+            est_tokens <= 700,
+            "TaskArgs schema grew to ~{est_tokens} tokens (>700); did a field description sneak back in?"
         );
     }
 

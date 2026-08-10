@@ -1,5 +1,6 @@
 use yojana::context;
 use yojana::db::{CreateTaskParams, Db, TaskUpdates};
+use yojana::state::TaskStatus;
 
 fn make_task(
     db: &Db,
@@ -131,7 +132,7 @@ fn bootstrap_v0_review() {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("ready-for-agent".into()),
+                status: Some(TaskStatus::ReadyForAgent),
                 ..Default::default()
             },
             "test",
@@ -140,7 +141,7 @@ fn bootstrap_v0_review() {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("in-progress".into()),
+                status: Some(TaskStatus::InProgress),
                 ..Default::default()
             },
             "test",
@@ -149,7 +150,7 @@ fn bootstrap_v0_review() {
         db.update_task(
             &id,
             TaskUpdates {
-                status: Some("done".into()),
+                status: Some(TaskStatus::Done),
                 ..Default::default()
             },
             "test",
@@ -173,7 +174,7 @@ fn bootstrap_v0_review() {
 
         let bundle = context::review(&task, &neighbors_with_edges);
         assert_eq!(bundle.shape, "review");
-        assert_eq!(bundle.status, "done");
+        assert_eq!(bundle.status, TaskStatus::Done);
         assert!(
             !bundle.git_refs.is_empty(),
             "task {} should have git refs",

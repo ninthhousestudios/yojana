@@ -14,12 +14,11 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
-use yojana::db::{
-    CreateTaskParams, Db, ProjectUpdates, TERMINAL_STATUSES, TaskQueryFilter, TaskUpdates,
-};
+use yojana::db::{CreateTaskParams, Db, ProjectUpdates, TaskQueryFilter, TaskUpdates};
 use yojana::display::{self, ArcDisplayInfo, EdgeDirection, EdgeDisplay};
 use yojana::graph::build_dependency_forest;
 use yojana::mcp::YojanaServer;
+use yojana::state::TaskStatus;
 
 const DONE_RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -56,7 +55,7 @@ enum Command {
         identifier: String,
         /// Filter by status
         #[arg(long)]
-        status: Option<String>,
+        status: Option<TaskStatus>,
         /// Filter by category
         #[arg(long)]
         category: Option<String>,
@@ -267,9 +266,8 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             let tasks = db.list_tasks(&filter)?;
-            let (active, recent_terminal): (Vec<_>, Vec<_>) = tasks
-                .into_iter()
-                .partition(|t| !TERMINAL_STATUSES.contains(&t.status.as_str()));
+            let (active, recent_terminal): (Vec<_>, Vec<_>) =
+                tasks.into_iter().partition(|t| !t.status.is_terminal());
             if active.is_empty() && recent_terminal.is_empty() {
                 println!("No tasks found.");
             } else {
@@ -340,10 +338,14 @@ async fn main() -> anyhow::Result<()> {
 
             let is_task_id = id.contains('/') || uuid::Uuid::try_parse(&id).is_ok();
             if is_task_id {
+                let task_status = status
+                    .as_deref()
+                    .map(|s| s.parse::<TaskStatus>())
+                    .transpose()?;
                 let updates = TaskUpdates {
                     title,
                     description,
-                    status,
+                    status: task_status,
                     force_status: true,
                     category: category.map(|c| if c.is_empty() { None } else { Some(c) }),
                     ..Default::default()
@@ -508,7 +510,7 @@ async fn main() -> anyhow::Result<()> {
 
             let old_status = task.status.clone();
             let updates = TaskUpdates {
-                status: Some("done".to_string()),
+                status: Some(TaskStatus::Done),
                 context_refs: if refs_changed {
                     Some(serde_json::to_string(&context_refs)?)
                 } else {
@@ -573,7 +575,7 @@ async fn main() -> anyhow::Result<()> {
 
             let old_status = task.status.clone();
             let updates = TaskUpdates {
-                status: Some("wontfix".to_string()),
+                status: Some(TaskStatus::WontFix),
                 force_status: true,
                 ..Default::default()
             };
@@ -727,8 +729,7 @@ async fn serve_http() -> anyhow::Result<()> {
 }
 
 fn is_stale_terminal(t: &yojana::db::TaskRow, cutoff: i64) -> bool {
-    TERMINAL_STATUSES.contains(&t.status.as_str())
-        && t.completed_at.map(|c| c < cutoff).unwrap_or(true)
+    t.status.is_terminal() && t.completed_at.map(|c| c < cutoff).unwrap_or(true)
 }
 
 fn tree_all_stale(
