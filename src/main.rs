@@ -508,7 +508,7 @@ async fn main() -> anyhow::Result<()> {
                 false
             };
 
-            let old_status = task.status.clone();
+            let old_status = task.status;
             let updates = TaskUpdates {
                 status: Some(TaskStatus::Done),
                 context_refs: if refs_changed {
@@ -573,7 +573,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let comment = format!("[close:wontfix:{}] {}", reason_tag, body);
 
-            let old_status = task.status.clone();
+            let old_status = task.status;
             let updates = TaskUpdates {
                 status: Some(TaskStatus::WontFix),
                 force_status: true,
