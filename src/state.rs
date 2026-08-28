@@ -59,7 +59,14 @@ impl TaskStatus {
             NeedsInfo => &[NeedsTriage, ReadyForAgent, ReadyForHuman, WontFix],
             ReadyForAgent => &[NeedsTriage, InProgress, ReadyForHuman],
             ReadyForHuman => &[NeedsTriage, InProgress, ReadyForAgent],
-            InProgress => &[NeedsReview, Done, NeedsTriage, WontFix],
+            InProgress => &[
+                NeedsReview,
+                Done,
+                NeedsTriage,
+                NeedsInfo,
+                ReadyForHuman,
+                WontFix,
+            ],
             NeedsReview => &[Done, InProgress, NeedsTriage],
             Done => &[NeedsTriage],
             WontFix => &[NeedsTriage],
@@ -165,6 +172,14 @@ mod tests {
                 "noop transition should be allowed for {status:?}"
             );
         }
+    }
+
+    #[test]
+    fn in_progress_can_step_back_to_human_tracks() {
+        use TaskStatus::*;
+        // Work uncovered a blocking question or needs human attention.
+        assert!(validate_transition(InProgress, NeedsInfo).is_ok());
+        assert!(validate_transition(InProgress, ReadyForHuman).is_ok());
     }
 
     #[test]

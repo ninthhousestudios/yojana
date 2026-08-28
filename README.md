@@ -137,7 +137,7 @@ needs-triage ──► needs-info
              ──► wontfix
 ```
 
-`needs-info`, `ready-for-agent`, and `ready-for-human` can also transition back to `needs-triage` if scope shifts. Terminal states (`done`, `wontfix`) reset to `needs-triage` if reopened. Transitioning into `done` records `completed_at`; transitioning out clears it.
+`needs-info`, `ready-for-agent`, and `ready-for-human` can also transition back to `needs-triage` if scope shifts. `in-progress` can also step back to `needs-info` (work uncovered a blocking question) or `ready-for-human` (work needs human attention — design decision, review, grilling). Terminal states (`done`, `wontfix`) reset to `needs-triage` if reopened. Transitioning into `done` records `completed_at`; transitioning out clears it.
 
 **Discipline note:** when you create tasks out of an explicit triage process (a review, a decompose, a planning session), set the status accurately on creation rather than letting `needs-triage` default. `needs-triage` means *untriaged*, not *just created*.
 
