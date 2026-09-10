@@ -14,7 +14,7 @@ clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
 dotenvy = "0.15"
 parking_lot = "0.12"
-rmcp = { version = "1", features = ["server", "transport-io", "transport-streamable-http-server", "macros", "schemars"] }
+rmcp = { version = "3", features = ["server", "transport-io", "transport-streamable-http-server", "macros", "schemars"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
