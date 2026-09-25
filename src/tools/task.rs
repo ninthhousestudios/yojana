@@ -234,7 +234,96 @@ fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError
     Ok((row.id, row.slug))
 }
 
+impl TaskArgs {
+    /// Names of every optional field the caller supplied. An explicit null on a
+    /// double-option field (a clear request) counts as supplied.
+    fn supplied_fields(&self) -> Vec<&'static str> {
+        [
+            ("id", self.id.is_some()),
+            ("project", self.project.is_some()),
+            ("title", self.title.is_some()),
+            ("description", self.description.is_some()),
+            ("category", self.category.is_some()),
+            ("status", self.status.is_some()),
+            ("slice_type", self.slice_type.is_some()),
+            ("acceptance_criteria", self.acceptance_criteria.is_some()),
+            ("decisions", self.decisions.is_some()),
+            ("context_refs", self.context_refs.is_some()),
+            ("files", self.files.is_some()),
+            ("tags", self.tags.is_some()),
+            ("implementation_plan", self.implementation_plan.is_some()),
+            ("execution_record", self.execution_record.is_some()),
+            ("reproduction", self.reproduction.is_some()),
+            ("root_cause", self.root_cause.is_some()),
+            ("text", self.text.is_some()),
+            ("author", self.author.is_some()),
+            ("commit", self.commit.is_some()),
+            ("arc_id", self.arc_id.is_some()),
+            ("arc_phase", self.arc_phase.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect()
+    }
+
+    /// Reject fields the action would otherwise drop silently (yojana/61): a
+    /// success ack over an ignored field reads as "applied".
+    fn reject_inapplicable_fields(&self) -> Result<(), YojanaError> {
+        const DETAIL: &[&str] = &[
+            "title",
+            "description",
+            "category",
+            "status",
+            "slice_type",
+            "acceptance_criteria",
+            "decisions",
+            "context_refs",
+            "files",
+            "tags",
+            "implementation_plan",
+            "execution_record",
+            "reproduction",
+            "root_cause",
+            "author",
+            "arc_id",
+            "arc_phase",
+        ];
+        let accepts = |field: &str| match self.action {
+            TaskAction::Create => field == "project" || DETAIL.contains(&field),
+            TaskAction::Update => matches!(field, "id" | "commit") || DETAIL.contains(&field),
+            TaskAction::Get => field == "id",
+            TaskAction::Comment => matches!(field, "id" | "text" | "author"),
+        };
+        let rejected: Vec<&str> = self
+            .supplied_fields()
+            .into_iter()
+            .filter(|f| !accepts(f))
+            .collect();
+        if rejected.is_empty() {
+            return Ok(());
+        }
+        let action = match self.action {
+            TaskAction::Create => "create",
+            TaskAction::Get => "get",
+            TaskAction::Update => "update",
+            TaskAction::Comment => "comment",
+        };
+        let mut msg = format!(
+            "field(s) not applicable to action={action}: {}",
+            rejected.join(", ")
+        );
+        if matches!(self.action, TaskAction::Update) && rejected.contains(&"project") {
+            msg.push_str(
+                "; a task's project is immutable — recreate it in the target project \
+                 and wontfix the original",
+            );
+        }
+        Err(YojanaError::InvalidInput(msg))
+    }
+}
+
 pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError> {
+    args.reject_inapplicable_fields()?;
     match args.action {
         TaskAction::Create => {
             let project = args
@@ -505,6 +594,102 @@ mod tests {
         .unwrap();
         assert_eq!(keys(&out), vec!["task", "ts"]);
         assert!(out.get("message").is_none());
+    }
+
+    fn plain_task(db: &Db) -> String {
+        let mut args = task_args_create("Target", "design");
+        args.arc_id = None;
+        args.arc_phase = None;
+        let created = handle(db, args).unwrap();
+        created["human_id"].as_str().unwrap().to_string()
+    }
+
+    fn invalid_input(result: Result<serde_json::Value, YojanaError>) -> String {
+        match result {
+            Err(YojanaError::InvalidInput(msg)) => msg,
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_rejects_project_instead_of_silently_ignoring_it() {
+        let db = test_db();
+        db.create_project("other", "Other", "", None, "test")
+            .unwrap();
+        let id = plain_task(&db);
+        let msg = invalid_input(handle(
+            &db,
+            TaskArgs {
+                id: Some(id.clone()),
+                project: Some("other".into()),
+                ..plain_blank(TaskAction::Update)
+            },
+        ));
+        assert!(msg.contains("project"), "{msg}");
+        assert!(msg.contains("immutable"), "{msg}");
+        let task = db.get_task(&id).unwrap().unwrap();
+        assert_eq!(task.project_slug, "proj");
+    }
+
+    #[test]
+    fn each_action_rejects_inapplicable_fields() {
+        let db = test_db();
+        let id = plain_task(&db);
+        let cases = [
+            (
+                TaskArgs {
+                    project: Some("proj".into()),
+                    title: Some("t".into()),
+                    commit: Some("abc123".into()),
+                    ..plain_blank(TaskAction::Create)
+                },
+                "commit",
+            ),
+            (
+                TaskArgs {
+                    id: Some(id.clone()),
+                    text: Some("belongs on comment".into()),
+                    ..plain_blank(TaskAction::Update)
+                },
+                "text",
+            ),
+            (
+                TaskArgs {
+                    id: Some(id.clone()),
+                    status: Some(TaskStatus::Done),
+                    ..plain_blank(TaskAction::Get)
+                },
+                "status",
+            ),
+            (
+                TaskArgs {
+                    id: Some(id.clone()),
+                    text: Some("hi".into()),
+                    tags: Some(vec!["x".into()]),
+                    ..plain_blank(TaskAction::Comment)
+                },
+                "tags",
+            ),
+        ];
+        for (args, field) in cases {
+            let msg = invalid_input(handle(&db, args));
+            assert!(msg.contains(field), "expected '{field}' in: {msg}");
+        }
+    }
+
+    #[test]
+    fn explicit_null_counts_as_supplied() {
+        let db = test_db();
+        let id = plain_task(&db);
+        let msg = invalid_input(handle(
+            &db,
+            TaskArgs {
+                id: Some(id),
+                root_cause: Some(None),
+                ..plain_blank(TaskAction::Get)
+            },
+        ));
+        assert!(msg.contains("root_cause"), "{msg}");
     }
 
     #[test]
