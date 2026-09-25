@@ -56,7 +56,7 @@ CREATE TABLE projects (
   slug         TEXT NOT NULL UNIQUE,        -- "manas-core", "yojana", "aion"
   title        TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
-  status       TEXT NOT NULL DEFAULT 'active',  -- active, paused, archived
+  status       TEXT NOT NULL DEFAULT 'active',  -- active, production, paused, archived
   history      TEXT NOT NULL DEFAULT '[]',  -- jsonb of {ts, kind, payload}
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL

@@ -207,7 +207,19 @@ pub struct TaskQueryFilter {
 
 // --- Project statuses ---
 
-const VALID_PROJECT_STATUSES: &[&str] = &["active", "production", "paused", "archived"];
+pub const VALID_PROJECT_STATUSES: &[&str] = &["active", "production", "paused", "archived"];
+
+/// Single validation point for project status, shared by the DB layer and
+/// the MCP tool layer so the accepted set cannot drift between them.
+pub fn validate_project_status(status: &str) -> Result<(), YojanaError> {
+    if !VALID_PROJECT_STATUSES.contains(&status) {
+        return Err(YojanaError::InvalidInput(format!(
+            "invalid project status '{status}'; valid: {}",
+            VALID_PROJECT_STATUSES.join(", ")
+        )));
+    }
+    Ok(())
+}
 
 // --- Edge types ---
 
@@ -919,12 +931,7 @@ impl Db {
             });
         }
         if let Some(ref new_status) = updates.status {
-            if !VALID_PROJECT_STATUSES.contains(&new_status.as_str()) {
-                return Err(YojanaError::InvalidInput(format!(
-                    "invalid project status '{new_status}'; valid: {}",
-                    VALID_PROJECT_STATUSES.join(", ")
-                )));
-            }
+            validate_project_status(new_status)?;
             if new_status != &project.status {
                 history.push(HistoryEntry {
                     ts: now,

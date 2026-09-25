@@ -3,10 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use uuid::Uuid;
 
-use crate::db::{Db, HistoryEntry, ProjectRow, ProjectUpdates};
+use crate::db::{Db, HistoryEntry, ProjectRow, ProjectUpdates, validate_project_status};
 use crate::error::YojanaError;
-
-const VALID_STATUSES: &[&str] = &["active", "paused", "archived"];
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -142,16 +140,6 @@ fn validate_slug(slug: &str) -> Result<(), YojanaError> {
     Ok(())
 }
 
-fn validate_status(status: &str) -> Result<(), YojanaError> {
-    if !VALID_STATUSES.contains(&status) {
-        return Err(YojanaError::InvalidInput(format!(
-            "invalid status '{status}'; valid: {}",
-            VALID_STATUSES.join(", ")
-        )));
-    }
-    Ok(())
-}
-
 fn resolve_parent_id(db: &Db, slug: &str) -> Result<Option<Uuid>, YojanaError> {
     if let Some((parent_slug, _)) = slug.rsplit_once('/') {
         let parent = db.get_project(None, Some(parent_slug))?.ok_or_else(|| {
@@ -196,7 +184,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
         }
         "list" => {
             if let Some(ref status) = args.status {
-                validate_status(status)?;
+                validate_project_status(status)?;
             }
             let parent_filter = if let Some(ref parent) = args.parent {
                 let parent_row = if let Ok(uuid) = Uuid::parse_str(parent) {
@@ -228,7 +216,7 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
         }
         "update" => {
             if let Some(ref status) = args.status {
-                validate_status(status)?;
+                validate_project_status(status)?;
             }
             let row = db.update_project(
                 args.id.as_deref(),
@@ -245,5 +233,58 @@ pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaErr
         other => Err(YojanaError::InvalidInput(format!(
             "unknown action '{other}'; valid: create, get, list, update"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(action: &str, slug: &str, status: Option<&str>) -> ProjectArgs {
+        ProjectArgs {
+            action: action.into(),
+            id: None,
+            slug: Some(slug.into()),
+            title: None,
+            description: None,
+            status: status.map(Into::into),
+            parent: None,
+            compact: None,
+        }
+    }
+
+    #[test]
+    fn every_db_status_accepted_via_mcp() {
+        let db = Db::open_in_memory().expect("invariant: in-memory db opens");
+        db.create_project("proj", "Project", "", None, "test")
+            .expect("invariant: fresh db accepts project");
+        for status in crate::db::VALID_PROJECT_STATUSES {
+            let ack = handle(&db, args("update", "proj", Some(status)))
+                .unwrap_or_else(|e| panic!("update to '{status}' rejected: {e}"));
+            assert_eq!(ack["status"], *status);
+            handle(&db, args("list", "proj", Some(status)))
+                .unwrap_or_else(|e| panic!("list filter '{status}' rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn update_to_production_succeeds() {
+        let db = Db::open_in_memory().expect("invariant: in-memory db opens");
+        db.create_project("proj", "Project", "", None, "test")
+            .expect("invariant: fresh db accepts project");
+        let ack = handle(&db, args("update", "proj", Some("production")))
+            .expect("production is a valid project status");
+        assert_eq!(ack["status"], "production");
+    }
+
+    #[test]
+    fn unknown_status_rejected() {
+        let db = Db::open_in_memory().expect("invariant: in-memory db opens");
+        db.create_project("proj", "Project", "", None, "test")
+            .expect("invariant: fresh db accepts project");
+        assert!(matches!(
+            handle(&db, args("update", "proj", Some("bogus"))),
+            Err(YojanaError::InvalidInput(_))
+        ));
     }
 }
