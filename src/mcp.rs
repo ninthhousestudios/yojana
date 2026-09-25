@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::config::Config;
@@ -125,8 +125,8 @@ impl YojanaServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for YojanaServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(format!("yojana v{} — task graph server for the manas ecosystem. Tracks projects, tasks, dependencies, arcs (lifecycle phases), and context shapes.", env!("CARGO_PKG_VERSION")))
     }
 }
