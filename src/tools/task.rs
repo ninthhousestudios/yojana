@@ -7,6 +7,7 @@ use crate::context_ref::ContextRef;
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
 pub use crate::state::TaskStatus;
+use crate::tools::{reject_inapplicable_fields, supplied_fields};
 
 fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
@@ -235,39 +236,6 @@ fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError
 }
 
 impl TaskArgs {
-    /// Names of every optional field the caller supplied. An explicit null on a
-    /// double-option field (a clear request) counts as supplied.
-    fn supplied_fields(&self) -> Vec<&'static str> {
-        [
-            ("id", self.id.is_some()),
-            ("project", self.project.is_some()),
-            ("title", self.title.is_some()),
-            ("description", self.description.is_some()),
-            ("category", self.category.is_some()),
-            ("status", self.status.is_some()),
-            ("slice_type", self.slice_type.is_some()),
-            ("acceptance_criteria", self.acceptance_criteria.is_some()),
-            ("decisions", self.decisions.is_some()),
-            ("context_refs", self.context_refs.is_some()),
-            ("files", self.files.is_some()),
-            ("tags", self.tags.is_some()),
-            ("implementation_plan", self.implementation_plan.is_some()),
-            ("execution_record", self.execution_record.is_some()),
-            ("reproduction", self.reproduction.is_some()),
-            ("root_cause", self.root_cause.is_some()),
-            ("text", self.text.is_some()),
-            ("author", self.author.is_some()),
-            ("commit", self.commit.is_some()),
-            ("arc_id", self.arc_id.is_some()),
-            ("arc_phase", self.arc_phase.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(name, set)| set.then_some(name))
-        .collect()
-    }
-
-    /// Reject fields the action would otherwise drop silently (yojana/61): a
-    /// success ack over an ignored field reads as "applied".
     fn reject_inapplicable_fields(&self) -> Result<(), YojanaError> {
         const DETAIL: &[&str] = &[
             "title",
@@ -288,37 +256,34 @@ impl TaskArgs {
             "arc_id",
             "arc_phase",
         ];
-        let accepts = |field: &str| match self.action {
-            TaskAction::Create => field == "project" || DETAIL.contains(&field),
-            TaskAction::Update => matches!(field, "id" | "commit") || DETAIL.contains(&field),
-            TaskAction::Get => field == "id",
-            TaskAction::Comment => matches!(field, "id" | "text" | "author"),
+        let supplied = supplied_fields!(self; id, project, title, description, category,
+            status, slice_type, acceptance_criteria, decisions, context_refs, files, tags,
+            implementation_plan, execution_record, reproduction, root_cause, text, author,
+            commit, arc_id, arc_phase);
+        let (action, hints): (&str, &[(&str, &str)]) = match self.action {
+            TaskAction::Create => ("create", &[]),
+            TaskAction::Get => ("get", &[]),
+            TaskAction::Update => (
+                "update",
+                &[(
+                    "project",
+                    "a task's project is immutable — recreate it in the target project \
+                     and wontfix the original",
+                )],
+            ),
+            TaskAction::Comment => ("comment", &[]),
         };
-        let rejected: Vec<&str> = self
-            .supplied_fields()
-            .into_iter()
-            .filter(|f| !accepts(f))
-            .collect();
-        if rejected.is_empty() {
-            return Ok(());
-        }
-        let action = match self.action {
-            TaskAction::Create => "create",
-            TaskAction::Get => "get",
-            TaskAction::Update => "update",
-            TaskAction::Comment => "comment",
-        };
-        let mut msg = format!(
-            "field(s) not applicable to action={action}: {}",
-            rejected.join(", ")
-        );
-        if matches!(self.action, TaskAction::Update) && rejected.contains(&"project") {
-            msg.push_str(
-                "; a task's project is immutable — recreate it in the target project \
-                 and wontfix the original",
-            );
-        }
-        Err(YojanaError::InvalidInput(msg))
+        reject_inapplicable_fields(
+            action,
+            &supplied,
+            |field| match self.action {
+                TaskAction::Create => field == "project" || DETAIL.contains(&field),
+                TaskAction::Update => matches!(field, "id" | "commit") || DETAIL.contains(&field),
+                TaskAction::Get => field == "id",
+                TaskAction::Comment => matches!(field, "id" | "text" | "author"),
+            },
+            hints,
+        )
     }
 }
 

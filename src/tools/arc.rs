@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::context_ref::ContextRef;
 use crate::db::{ArcRow, ArcUpdates, CreateArcParams, Db, HistoryEntry};
 use crate::error::YojanaError;
+use crate::tools::{reject_inapplicable_fields, supplied_fields};
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -109,6 +110,34 @@ fn resolve_project(db: &Db, project: &str) -> Result<(Uuid, String), YojanaError
 }
 
 pub fn handle(db: &Db, args: ArcArgs) -> Result<serde_json::Value, YojanaError> {
+    let supplied = supplied_fields!(args; id, project, title, description, status, phases,
+        tags, context_refs, phase, note, skip);
+    reject_inapplicable_fields(
+        &args.action,
+        &supplied,
+        |field| match args.action.as_str() {
+            "create" => matches!(
+                field,
+                "project" | "title" | "description" | "phases" | "tags" | "context_refs"
+            ),
+            "get" => field == "id",
+            "update" => matches!(
+                field,
+                "id" | "title" | "description" | "status" | "tags" | "context_refs"
+            ),
+            "advance" => matches!(field, "id" | "phase" | "skip" | "note"),
+            "revert" => matches!(field, "id" | "phase" | "note"),
+            // Unknown actions are reported by the dispatch below.
+            _ => true,
+        },
+        &[
+            (
+                "phases",
+                "phases are fixed at create; use advance/revert to move between them",
+            ),
+            ("project", "an arc's project is immutable"),
+        ],
+    )?;
     match args.action.as_str() {
         "create" => {
             let project = args
@@ -804,5 +833,42 @@ mod tests {
 
         let err = handle(&db, arc_args("revert", "proj/~1")).unwrap_err();
         assert!(err.to_string().contains("phase required"));
+    }
+
+    #[test]
+    fn arc_tool_rejects_inapplicable_fields() {
+        let db = test_db();
+        create_arc(&db);
+        let update_phases = ArcArgs {
+            phases: Some(vec![serde_json::json!({"name": "x"})]),
+            ..arc_args("update", "proj/~1")
+        };
+        let err = handle(&db, update_phases).unwrap_err().to_string();
+        assert!(err.contains("phases"), "{err}");
+        assert!(err.contains("advance/revert"), "{err}");
+
+        let get_with_note = ArcArgs {
+            note: Some("ignored".into()),
+            ..arc_args("get", "proj/~1")
+        };
+        let err = handle(&db, get_with_note).unwrap_err().to_string();
+        assert!(err.contains("note"), "{err}");
+
+        let revert_with_skip = ArcArgs {
+            phase: Some("design".into()),
+            skip: Some(true),
+            ..arc_args("revert", "proj/~1")
+        };
+        let err = handle(&db, revert_with_skip).unwrap_err().to_string();
+        assert!(err.contains("skip"), "{err}");
+    }
+
+    #[test]
+    fn arc_tool_unknown_action_still_reported() {
+        let db = test_db();
+        let err = handle(&db, arc_args("frobnicate", "proj/~1"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown action"), "{err}");
     }
 }

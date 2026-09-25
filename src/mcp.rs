@@ -46,7 +46,7 @@ impl Clone for YojanaServer {
 #[tool_router(router = tool_router)]
 impl YojanaServer {
     #[tool(
-        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change). create/update return a slim ack {id, slug, status, title}; use action=get for full detail."
+        description = "Create, get, list, or update projects. Supports nested projects (workstreams) via slash-separated slugs. Actions: create (requires slug, title — parent auto-inferred from slug prefix), get (requires id or slug — returns full detail including children, description, history), list (returns slug + title per project by default; set compact=false for full rows: id, status, parent_id, child_count, timestamps; optional status filter; optional parent to scope to children), update (requires id or slug, plus fields to change — title, description, status; parent cannot be changed). Fields outside an action's contract are rejected, not ignored. create/update return a slim ack {id, slug, status, title}; use action=get for full detail."
     )]
     pub async fn yojana_project(
         &self,
@@ -57,7 +57,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, get, update, advance, or revert arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs), advance (requires id; optional phase to target specific phase, skip=true to set skipped instead of completed, note for history), revert (requires id and phase; sets completed phase back to active, optional note for history). create/update/advance/revert return a slim ack {id, human_id, status, active_phase}; use action=get for full detail (phases, history)."
+        description = "Create, get, update, advance, or revert arcs (lifecycle containers for tasks). Actions: create (requires project, title, phases — array of {name, slice_type?, gate?}; first phase defaults to active, rest to pending), get (requires id — UUID or 'project-slug/~N'), update (requires id, plus fields to change — status: active/paused/completed/abandoned, title, description, tags, context_refs), advance (requires id; optional phase to target specific phase, skip=true to set skipped instead of completed, note for history), revert (requires id and phase; sets completed phase back to active, optional note for history). Fields outside an action's contract are rejected, not ignored. create/update/advance/revert return a slim ack {id, human_id, status, active_phase}; use action=get for full detail (phases, history)."
     )]
     pub async fn yojana_arc(
         &self,
@@ -79,7 +79,7 @@ impl YojanaServer {
     }
 
     #[tool(
-        description = "Create, delete, or list task edges. Actions: create (requires source, target, edge_type — 'depends_on', 'relates_to', 'supersedes', 'refines', 'motivated_by'), delete (requires id), list (requires task — UUID or 'project-slug/N'). Cycle detection on depends_on edges."
+        description = "Create, delete, or list task edges. Actions: create (requires source, target, edge_type — 'depends_on', 'relates_to', 'supersedes', 'refines', 'motivated_by'), delete (requires id), list (requires task — UUID or 'project-slug/N'). Cycle detection on depends_on edges. Fields outside an action's contract are rejected, not ignored."
     )]
     pub async fn yojana_edge(
         &self,

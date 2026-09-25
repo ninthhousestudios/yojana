@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::db::{Db, HistoryEntry, ProjectRow, ProjectUpdates, validate_project_status};
 use crate::error::YojanaError;
+use crate::tools::{reject_inapplicable_fields, supplied_fields};
 
 // Field docs omitted to keep the schema small (it reloads on summarization);
 // semantics live in the tool-level description in src/mcp.rs.
@@ -154,6 +155,23 @@ fn resolve_parent_id(db: &Db, slug: &str) -> Result<Option<Uuid>, YojanaError> {
 }
 
 pub fn handle(db: &Db, args: ProjectArgs) -> Result<serde_json::Value, YojanaError> {
+    let supplied = supplied_fields!(args; id, slug, title, description, status, parent, compact);
+    reject_inapplicable_fields(
+        &args.action,
+        &supplied,
+        |field| match args.action.as_str() {
+            "create" => matches!(field, "slug" | "title" | "description"),
+            "get" => matches!(field, "id" | "slug"),
+            "list" => matches!(field, "status" | "parent" | "compact"),
+            "update" => matches!(field, "id" | "slug" | "title" | "description" | "status"),
+            // Unknown actions are reported by the dispatch below.
+            _ => true,
+        },
+        &[(
+            "parent",
+            "a project's parent is inferred from its slug prefix and cannot be set or changed",
+        )],
+    )?;
     match args.action.as_str() {
         "create" => {
             let slug = args
@@ -262,8 +280,11 @@ mod tests {
             let ack = handle(&db, args("update", "proj", Some(status)))
                 .unwrap_or_else(|e| panic!("update to '{status}' rejected: {e}"));
             assert_eq!(ack["status"], *status);
-            handle(&db, args("list", "proj", Some(status)))
-                .unwrap_or_else(|e| panic!("list filter '{status}' rejected: {e}"));
+            let list = ProjectArgs {
+                slug: None,
+                ..args("list", "proj", Some(status))
+            };
+            handle(&db, list).unwrap_or_else(|e| panic!("list filter '{status}' rejected: {e}"));
         }
     }
 
@@ -286,5 +307,41 @@ mod tests {
             handle(&db, args("update", "proj", Some("bogus"))),
             Err(YojanaError::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn update_rejects_parent_instead_of_silently_ignoring_it() {
+        let db = Db::open_in_memory().expect("invariant: in-memory db opens");
+        db.create_project("proj", "Project", "", None, "test")
+            .expect("invariant: fresh db accepts project");
+        let reparent = ProjectArgs {
+            parent: Some("other".into()),
+            ..args("update", "proj", None)
+        };
+        match handle(&db, reparent) {
+            Err(YojanaError::InvalidInput(msg)) => {
+                assert!(msg.contains("parent"), "{msg}");
+                assert!(msg.contains("slug prefix"), "{msg}");
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_rejects_status() {
+        let db = Db::open_in_memory().expect("invariant: in-memory db opens");
+        let create = ProjectArgs {
+            title: Some("New".into()),
+            ..args("create", "fresh", Some("production"))
+        };
+        assert!(matches!(
+            handle(&db, create),
+            Err(YojanaError::InvalidInput(msg)) if msg.contains("status")
+        ));
+        assert!(
+            db.get_project(None, Some("fresh"))
+                .expect("invariant: query runs")
+                .is_none()
+        );
     }
 }
