@@ -624,3 +624,45 @@ fn done_bug_task_with_message_writes_comment() {
 
     let _ = std::fs::remove_file(&db_path);
 }
+
+/// yojana/59: `done --commit` read-modify-writes context_refs. A stored value
+/// that fails to parse must make the command fail without writing, not read as
+/// empty and get overwritten with just the new commit ref.
+#[test]
+fn done_commit_refuses_to_clobber_unreadable_context_refs() {
+    let db_path = unique_db();
+    let malformed = r#"{"type":"doc:path","value":"not an array"}"#;
+    let human_id = {
+        let db = seed(&db_path);
+        db.create_project("cr", "CR", "", None, "test").unwrap();
+        let human_id = create_in_progress_task(&db, "cr", "refs task");
+        db.update_task(
+            &human_id,
+            yojana::db::TaskUpdates {
+                context_refs: Some(malformed.into()),
+                ..Default::default()
+            },
+            "test",
+        )
+        .unwrap();
+        human_id
+    };
+
+    let out = cli()
+        .args(["done", &human_id, "--commit", "abc1234"])
+        .env("YOJANA_DB_PATH", &db_path)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "done --commit must fail on unreadable context_refs; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let db = seed(&db_path);
+    let task = db.get_task(&human_id).unwrap().unwrap();
+    assert_eq!(task.context_refs, malformed, "column must be untouched");
+    assert_eq!(task.status, TaskStatus::InProgress, "no partial write");
+
+    let _ = std::fs::remove_file(&db_path);
+}

@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use yojana::config::Config;
+use yojana::context_ref::ContextRef;
 use yojana::db::{CreateTaskParams, Db, ProjectUpdates, TaskQueryFilter, TaskUpdates};
 use yojana::display::{self, ArcDisplayInfo, EdgeDirection, EdgeDisplay};
 use yojana::graph::build_dependency_forest;
@@ -499,23 +500,19 @@ async fn main() -> anyhow::Result<()> {
                 message
             };
 
-            let mut context_refs: Vec<serde_json::Value> =
-                serde_json::from_str(&task.context_refs).unwrap_or_default();
-            let refs_changed = if let Some(ref sha) = commit {
-                context_refs.push(serde_json::json!({"type": "git:commit", "value": sha}));
-                true
-            } else {
-                false
+            let context_refs = match commit {
+                Some(ref sha) => {
+                    let mut refs = ContextRef::parse_array_strict(&task.context_refs)?;
+                    refs.push(ContextRef::git_commit(sha));
+                    Some(serde_json::to_string(&refs)?)
+                }
+                None => None,
             };
 
             let old_status = task.status;
             let updates = TaskUpdates {
                 status: Some(TaskStatus::Done),
-                context_refs: if refs_changed {
-                    Some(serde_json::to_string(&context_refs)?)
-                } else {
-                    None
-                },
+                context_refs,
                 ..Default::default()
             };
             let updated = db.update_task(&id, updates, "josh")?;

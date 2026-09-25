@@ -3,7 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::acceptance::{self, AcceptanceCriterionInput};
-use crate::context_ref::{ContextRef, RefType};
+use crate::context_ref::ContextRef;
 use crate::db::{CreateTaskParams, Db, HistoryEntry, TaskRow, TaskUpdates};
 use crate::error::YojanaError;
 pub use crate::state::TaskStatus;
@@ -330,19 +330,15 @@ pub fn handle(db: &Db, args: TaskArgs) -> Result<serde_json::Value, YojanaError>
             // also passed (those take precedence as the base list).
             let merged_context_refs = if let Some(ref sha) = args.commit {
                 let mut refs: Vec<ContextRef> = match args.context_refs {
-                    Some(ref existing) => existing.clone(),
+                    Some(existing) => existing,
                     None => {
                         let task = db
                             .get_task(id)?
                             .ok_or_else(|| YojanaError::NotFound(format!("task '{id}'")))?;
-                        ContextRef::parse_array(&task.context_refs)
+                        ContextRef::parse_array_strict(&task.context_refs)?
                     }
                 };
-                refs.push(ContextRef {
-                    ref_type: RefType::GitCommit,
-                    value: sha.clone(),
-                    label: None,
-                });
+                refs.push(ContextRef::git_commit(sha));
                 Some(refs)
             } else {
                 args.context_refs
@@ -604,6 +600,55 @@ mod tests {
             "unreadable criteria must not read as absent, got {:?}",
             criteria[0]
         );
+    }
+
+    /// yojana/59: the commit shorthand read-modify-writes context_refs. A
+    /// stored value that fails to parse must refuse the write, not read as
+    /// empty and get overwritten with just the new commit ref.
+    #[test]
+    fn commit_shorthand_refuses_to_clobber_unreadable_context_refs() {
+        let db = test_db();
+        let created = handle(
+            &db,
+            TaskArgs {
+                project: Some("proj".into()),
+                title: Some("Task".into()),
+                ..plain_blank(TaskAction::Create)
+            },
+        )
+        .expect("invariant: create on fresh project succeeds");
+        let id = created["human_id"]
+            .as_str()
+            .expect("invariant: slim ack carries human_id")
+            .to_string();
+        let malformed = r#"{"type":"doc:path","value":"not an array"}"#;
+        db.update_task(
+            &id,
+            TaskUpdates {
+                context_refs: Some(malformed.into()),
+                ..Default::default()
+            },
+            "test",
+        )
+        .expect("invariant: db layer stores raw context_refs");
+
+        let result = handle(
+            &db,
+            TaskArgs {
+                id: Some(id.clone()),
+                commit: Some("abc1234".into()),
+                ..plain_blank(TaskAction::Update)
+            },
+        );
+        assert!(
+            matches!(result, Err(YojanaError::InvalidInput(_))),
+            "expected InvalidInput, got {result:?}"
+        );
+        let task = db
+            .get_task(&id)
+            .expect("invariant: db readable")
+            .expect("invariant: task exists");
+        assert_eq!(task.context_refs, malformed, "column must be untouched");
     }
 
     fn create_arc(db: &Db) -> serde_json::Value {
