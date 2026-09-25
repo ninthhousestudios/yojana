@@ -57,8 +57,8 @@ impl TaskStatus {
         match self {
             NeedsTriage => &[NeedsInfo, ReadyForAgent, ReadyForHuman, InProgress, WontFix],
             NeedsInfo => &[NeedsTriage, ReadyForAgent, ReadyForHuman, WontFix],
-            ReadyForAgent => &[NeedsTriage, InProgress, ReadyForHuman],
-            ReadyForHuman => &[NeedsTriage, InProgress, ReadyForAgent],
+            ReadyForAgent => &[NeedsTriage, InProgress, ReadyForHuman, WontFix],
+            ReadyForHuman => &[NeedsTriage, InProgress, ReadyForAgent, WontFix],
             InProgress => &[
                 NeedsReview,
                 Done,
