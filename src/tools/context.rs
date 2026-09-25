@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(out["shape"], "planning");
         assert!(out["arc_info"]["arc_title"].as_str().is_some());
         let prior_decisions = out["prior_phase_decisions"].as_array().unwrap();
-        assert!(prior_decisions.len() >= 1);
+        assert!(!prior_decisions.is_empty());
         let prior_records = out["prior_phase_execution_records"].as_array().unwrap();
         assert_eq!(prior_records.len(), 1);
         assert_eq!(prior_records[0]["record"], "completed design review");
@@ -444,7 +444,7 @@ mod tests {
 
         assert_eq!(out["shape"], "agent");
         assert_eq!(out["arc_info"]["current_phase"], "implement");
-        assert!(out["prior_phase_decisions"].as_array().unwrap().len() >= 1);
+        assert!(!out["prior_phase_decisions"].as_array().unwrap().is_empty());
     }
 
     #[test]
